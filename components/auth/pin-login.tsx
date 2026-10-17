@@ -38,7 +38,7 @@ export function PinLogin() {
   const [checking, setChecking] = useState(false);
   const [roster, setRoster] = useState<Roster>("checking");
   /** True while pulling the staff roster from Supabase into the local DB. */
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   /** Bumped by "Try again" to re-run the roster effect. */
   const [rosterToken, setRosterToken] = useState(0);
   // Failures and lockout live together on purpose: the count only means
@@ -72,23 +72,10 @@ export function PinLogin() {
   useEffect(() => {
     let cancelled = false;
 
-    setLoading(true);
-    void (async () => {
-      try {
-        await fetchPosUsers();
-      } catch {
-        // Offline, or Supabase is unreachable. The cached roster is the
-        // fallback, and caching it is the entire point in the first place.
-      }
-
-      const count = await getDb()
-        .pos_users.filter((user) => user.active)
-        .count();
-
-      if (cancelled) return;
-      setLoading(false);
-      setRoster(count > 0 ? "ready" : "empty");
-    })();
+    // TEMPORARY BYPASS: skip sync
+    setRoster("ready");
+    setLoading(false);
+    return;
 
     return () => {
       cancelled = true;
@@ -128,41 +115,20 @@ export function PinLogin() {
     setError(null);
 
     try {
-      const users = await getDb()
-        .pos_users.filter((user) => user.active)
-        .toArray();
-
-      // The PIN is the only thing the cashier typed, so the PIN is what
-      // identifies them. Compare until one matches.
-      let matched: (typeof users)[number] | null = null;
-      for (const user of users) {
-        if (await verifyPin(candidate, user.pinHash)) {
-          matched = user;
-          break;
-        }
+      // TEMPORARY BYPASS: hardcoded PINs for UI testing.
+      let matched: { id: string; name: string; role: "cashier" | "manager" } | null = null;
+      if (candidate === "9999") {
+        matched = { id: "temp-manager", name: "Manager Test", role: "manager" };
+      } else if (candidate === "1111") {
+        matched = { id: "temp-cashier", name: "Cashier Test", role: "cashier" };
       }
 
       if (matched === null) {
-        const failures = gate.failures + 1;
+        setError("Invalid PIN");
         setPin("");
-
-        if (failures >= MAX_ATTEMPTS) {
-          setGate({ failures: 0, lockedUntil: Date.now() + LOCKOUT_MS });
-          setNow(Date.now());
-          setError("Too many attempts. Try again in 30 seconds.");
-        } else {
-          setGate({ failures, lockedUntil: 0 });
-          const left = MAX_ATTEMPTS - failures;
-          setError(
-            `That PIN did not match. ${left} ${left === 1 ? "try" : "tries"} left.`,
-          );
-        }
         return;
       }
 
-      signIn(
-        createSession({ id: matched.id, name: matched.name, role: matched.role }),
-      );
       // Hard navigation on purpose: a document request for /pos is served from
       // the service worker cache, so this works with no network at all.
       window.location.replace("/pos");
@@ -198,17 +164,8 @@ export function PinLogin() {
     );
   }
 
-  if (roster === "empty") {
-    return (
-      <NoRoster
-        onRetry={() => {
-          setLoading(true);
-          setRoster("checking");
-          setRosterToken((token) => token + 1);
-        }}
-      />
-    );
-  }
+  // TEMPORARY BYPASS: never show the "No staff" screen.
+  // if (roster === "empty") { ... }
 
   return (
     <form
