@@ -20,7 +20,7 @@ export default function LoginPage() {
   return (
     <>
       <SyncProvider />
-      <main className="flex min-h-full flex-1 flex-col lg:flex-row">
+      <main className="min-h-screen flex flex-1 items-center justify-center flex-col lg:flex-row">
         <section className="relative hidden flex-1 flex-col justify-between overflow-hidden bg-primary-dark p-12 lg:flex">
           {/* The stitch rule, oversized and very low contrast: texture from the
               brand's own vocabulary rather than a decorative gradient. */}

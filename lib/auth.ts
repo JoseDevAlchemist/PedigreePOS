@@ -37,7 +37,7 @@ export const POS_SESSION_STORAGE_KEY = "pedigree-pos.session";
 
 /** Long enough to have a little entropy, short enough to type on a numpad. */
 export const PIN_MIN_LENGTH = 4;
-export const PIN_MAX_LENGTH = 6;
+export const PIN_MAX_LENGTH = 4;
 
 /** bcrypt cost. 10 is ~100ms in a browser tab: slow enough to blunt guessing,
  * fast enough that the keypad does not feel broken. */

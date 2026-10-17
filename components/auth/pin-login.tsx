@@ -140,8 +140,12 @@ export function PinLogin() {
   function press(digit: string) {
     if (locked || checking) return;
     setError(null);
-    setPin((current) => normalizePin(current + digit).slice(0, PIN_MAX_LENGTH));
+    const next = normalizePin(pin + digit).slice(0, PIN_MAX_LENGTH);
+    setPin(next);
     inputRef.current?.focus();
+    if (next.length === PIN_MAX_LENGTH) {
+      void submit(next);
+    }
   }
 
   function backspace() {
@@ -204,7 +208,11 @@ export function PinLogin() {
           aria-describedby={error !== null ? "pos-pin-error" : undefined}
           onChange={(event) => {
             setError(null);
-            setPin(normalizePin(event.target.value).slice(0, PIN_MAX_LENGTH));
+            const next = normalizePin(event.target.value).slice(0, PIN_MAX_LENGTH);
+            setPin(next);
+            if (next.length === PIN_MAX_LENGTH) {
+              void submit(next);
+            }
           }}
           className="sr-only"
         />
@@ -246,7 +254,7 @@ export function PinLogin() {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-3">
+      <div className="mt-4 grid grid-cols-3 gap-4 mx-auto max-w-sm md:gap-6">
         {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((digit) => (
           <KeypadButton key={digit} onClick={() => press(digit)} disabled={locked}>
             {digit}
