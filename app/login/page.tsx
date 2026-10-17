@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { BrandMark } from "@/components/brand-mark";
 import { PinLogin } from "@/components/auth/pin-login";
+import { SupabaseConnectionCheck } from "@/components/supabase-connection-check";
 import { SyncProvider } from "@/components/sync-provider";
 
 export const metadata: Metadata = {
@@ -20,8 +21,9 @@ export default function LoginPage() {
   return (
     <>
       <SyncProvider />
-      <main className="min-h-screen flex flex-1 items-center justify-center flex-col lg:flex-row">
-        <section className="relative hidden h-full flex-1 flex-col justify-between overflow-hidden bg-primary-dark p-12 lg:flex">
+      <SupabaseConnectionCheck />
+      <main className="flex h-screen min-h-screen flex-1 flex-col items-center justify-center lg:flex-row">
+        <section className="relative hidden h-full flex-1 flex-col justify-between bg-primary-dark p-12 md:flex">
           {/* The stitch rule, oversized and very low contrast: texture from the
               brand's own vocabulary rather than a decorative gradient. */}
           <div
@@ -47,7 +49,7 @@ export default function LoginPage() {
           </p>
         </section>
 
-        <section className="flex h-full flex-1 items-center justify-center bg-background px-6 py-14">
+        <section className="flex h-full min-h-screen flex-1 items-center justify-center bg-background px-6 py-14">
           <div className="w-full max-w-sm">
             <div className="mb-10 flex justify-center lg:hidden">
               <BrandMark size={56} tagline />
