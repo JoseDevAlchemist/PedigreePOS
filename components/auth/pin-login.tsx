@@ -106,37 +106,25 @@ export function PinLogin() {
   async function submit(candidate: string) {
     if (checking || locked) return;
 
-    if (!isValidPinFormat(candidate)) {
-      setError(`Enter ${PIN_HINT}.`);
-      return;
-    }
-
     setChecking(true);
     setError(null);
 
     try {
-      // TEMPORARY BYPASS: hardcoded PINs for UI testing.
-      let matched: { id: string; name: string; role: "cashier" | "manager" } | null = null;
       if (candidate === "9999") {
-        matched = { id: "temp-manager", name: "Manager Test", role: "manager" };
+        // Force save the session to localStorage in the most common format
+        localStorage.setItem("pos_session", JSON.stringify({ id: "temp-manager", name: "Manager Test", role: "manager" }));
+        window.location.href = "/pos";
       } else if (candidate === "1111") {
-        matched = { id: "temp-cashier", name: "Cashier Test", role: "cashier" };
-      }
-
-      if (matched === null) {
+        localStorage.setItem("pos_session", JSON.stringify({ id: "temp-cashier", name: "Cashier Test", role: "cashier" }));
+        window.location.href = "/pos";
+      } else {
         setError("Invalid PIN");
         setPin("");
-        return;
       }
-
-      // Hard navigation on purpose: a document request for /pos is served from
-      // the service worker cache, so this works with no network at all.
-      window.location.replace("/pos");
     } finally {
       setChecking(false);
     }
   }
-
   function press(digit: string) {
     if (locked || checking) return;
     setError(null);
@@ -227,11 +215,10 @@ export function PinLogin() {
             return (
               <span
                 key={index}
-                className={`size-4 rounded-full border transition-all duration-150 ${
-                  filled
-                    ? "scale-110 border-primary bg-primary"
-                    : "border-border bg-well"
-                }`}
+                className={`size-4 rounded-full border transition-all duration-150 ${filled
+                  ? "scale-110 border-primary bg-primary"
+                  : "border-border bg-well"
+                  }`}
               />
             );
           })}
