@@ -1,0 +1,232 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Pedigree POS design tokens.
+
+   Copied from the Pedigree Leather storefront so the two apps read as one
+   brand: brown, cream, gold and charcoal, and nothing else. Components use the
+   semantic tokens this file produces — bg-primary, text-muted, border-border —
+   never a raw hex value.
+
+   Everything is written down once, here.
+   --------------------------------------------------------------------------- */
+
+:root {
+  /* Brand primitives */
+  --pedigree-brown: #5d4037;
+  --pedigree-gold: #d4af37;
+  --pedigree-cream: #f5e9d9;
+  --pedigree-charcoal: #2b2b2b;
+
+  /* Derived tints — same hues, tuned for contrast on the surfaces above. */
+  --pedigree-brown-deep: #3b2a24; /* 11.4:1 on cream */
+  --pedigree-brown-dark: #4a332b; /* the POS chrome's own brown */
+  --pedigree-gold-bright: #e8ce7a; /* 6.0:1 on brown */
+  --pedigree-cream-soft: #fcf6ee; /* cards sit a shade above the page */
+  --pedigree-cream-deep: #efe1cd; /* wells and pressed states */
+  --pedigree-border: #e2d3bf; /* warm hairline, decorative only */
+  --pedigree-muted: #6e5b4c; /* secondary text on cream, 5.4:1 */
+
+  /* Status colours. A till needs two unambiguous signals — "this is safely
+     stored" and "this is not — so they are tokens rather than inline greens
+     and reds picked per component. Chosen to hold up on cream and on brown. */
+  --pedigree-success: #1f7a4d;
+  --pedigree-success-soft: #dcefe3;
+  --pedigree-danger: #b3261e;
+  --pedigree-danger-soft: #f7dedb;
+
+  /* Elevation. Warm rather than neutral grey: a grey shadow on cream reads as
+     dirt. */
+  --pedigree-shadow-bar: 0 1px 2px -1px rgb(43 43 43 / 0.18),
+    0 12px 28px -18px rgb(43 43 43 / 0.55);
+  --pedigree-shadow-panel: -28px 0 70px -40px rgb(43 43 43 / 0.7);
+  --pedigree-shadow-card: 0 1px 2px -1px rgb(43 43 43 / 0.1),
+    0 8px 20px -16px rgb(43 43 43 / 0.45);
+  --pedigree-shadow-card-lift: 0 2px 6px -2px rgb(43 43 43 / 0.14),
+    0 18px 38px -22px rgb(43 43 43 / 0.55);
+  --pedigree-shadow-overlay: 0 24px 60px -24px rgb(43 43 43 / 0.6);
+}
+
+@theme inline {
+  /* Type: a high-contrast serif for display, a plain sans for everything else */
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-cormorant), ui-serif, Georgia, serif;
+
+  /* Brand primitives, for the rare case that needs the raw hue */
+  --color-brown: var(--pedigree-brown);
+  --color-gold: var(--pedigree-gold);
+  --color-cream: var(--pedigree-cream);
+  --color-charcoal: var(--pedigree-charcoal);
+
+  /* Semantic tokens — these are what components use */
+  --color-background: var(--pedigree-cream);
+  --color-foreground: var(--pedigree-charcoal);
+  --color-primary: var(--pedigree-brown);
+  --color-primary-deep: var(--pedigree-brown-deep);
+  --color-primary-dark: var(--pedigree-brown-dark);
+  --color-accent: var(--pedigree-gold);
+  --color-accent-ink: var(--pedigree-gold-bright);
+  --color-card: var(--pedigree-cream-soft);
+  --color-well: var(--pedigree-cream-deep);
+  --color-border: var(--pedigree-border);
+  --color-muted: var(--pedigree-muted);
+
+  --color-success: var(--pedigree-success);
+  --color-success-soft: var(--pedigree-success-soft);
+  --color-danger: var(--pedigree-danger);
+  --color-danger-soft: var(--pedigree-danger-soft);
+  --color-danger-ink: #fff1ef; /* foreground for text on --color-danger */
+
+  --shadow-bar: var(--pedigree-shadow-bar);
+  --shadow-panel: var(--pedigree-shadow-panel);
+  --shadow-card: var(--pedigree-shadow-card);
+  --shadow-card-lift: var(--pedigree-shadow-card-lift);
+  --shadow-overlay: var(--pedigree-shadow-overlay);
+}
+
+body {
+  background-color: var(--pedigree-cream);
+  color: var(--pedigree-charcoal);
+}
+
+/* Saddle stitch: a dashed rule in the current text colour. Used as the "you
+   are here" marker under the active nav link. */
+@utility stitch {
+  background-image: repeating-linear-gradient(
+    90deg,
+    currentColor 0 3px,
+    transparent 3px 7px
+  );
+}
+
+/* Hides a scroll container's scrollbar without hiding its scrolling. The
+   scroll position stays keyboard reachable, so this never goes on a
+   page-level scroller. */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Loading placeholder.
+
+   An opacity animation and nothing else: opacity stays on the compositor, so a
+   grid of skeletons costs no layout and no repaint.
+   --------------------------------------------------------------------------- */
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@utility skeleton-pulse {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: skeleton-pulse 1.7s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   80mm thermal receipt.
+
+   `@page` has to be a real at-rule rather than a Tailwind variant so the print
+   dialog picks 80mm roll paper with no margins. The `.print-root` marker (added
+   by `components/ui/modal.tsx`) is what `window.print()` leaves on the page when
+   the user prints a receipt from inside the app: everything else is hidden and
+   only the receipt is sent to the till printer.
+
+   The height is spelled out because a content-sized one is not available to us.
+   `size: 80mm auto` — the obvious way to say "as long as the receipt is" — does
+   not parse: per CSS Paged Media a `size` is either one or two lengths, or
+   `auto`, never a length plus `auto`. Chrome drops the whole declaration and
+   falls back to Letter, which is how an 80mm receipt ends up laid out on a
+   216mm-wide sheet. `size: 80mm` is also wrong, and quietly so: a single length
+   sets *both* sides, so it would print on an 80mm square.
+
+   So: 80mm wide, 297mm tall — the "80mm continuous roll" setting the Windows
+   drivers for these printers expose. The height is a maximum, not a promise: a
+   receipt shorter than a sheet still prints once, and one longer than 297mm
+   paginates the way any long page does. As ever, the printer driver has the last
+   word on paper size; this is what makes the preview and Print-to-PDF agree with
+   the roll.
+   --------------------------------------------------------------------------- */
+
+@page {
+  size: 80mm 297mm;
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Printing a receipt.
+
+   The receipt lives in a modal, which the browser would otherwise print at
+   whatever position it happens to occupy — alongside the dimmed backdrop, the
+   dialog chrome and the buttons. So printing is treated as "show one element
+   and nothing else":
+
+   - The modal is portalled to `document.body`, so hiding every other body
+     child removes the entire app in one rule. `display: none` rather than
+     `visibility: hidden`, because hidden-but-present layout would push the
+     receipt down the page and waste a strip of roll paper per invisible screen.
+   - The portal's wrapper and panel are flattened back to static flow, so the
+     receipt starts at the top-left of the roll with no offsets from centring.
+   - The backdrop and anything marked `.no-print` are dropped.
+   --------------------------------------------------------------------------- */
+
+@media print {
+  html,
+  body {
+    background: #ffffff !important;
+  }
+
+  body > *:not(.print-root) {
+    display: none !important;
+  }
+
+  .print-root {
+    position: static !important;
+    display: block !important;
+    padding: 0 !important;
+  }
+
+  .print-root [aria-hidden="true"],
+  .no-print {
+    display: none !important;
+  }
+
+  .print-root > [role="dialog"] {
+    position: static !important;
+    display: block !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+  }
+
+  /* The dialog's own header and its scroll container are chrome. */
+  .print-root > [role="dialog"] > header {
+    display: none !important;
+  }
+
+  .print-root > [role="dialog"] > div {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .receipt-paper,
+  #receipt-print-area {
+    width: 80mm !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+  }
+}
