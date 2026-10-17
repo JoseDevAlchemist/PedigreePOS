@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { Search, X } from "lucide-react";
 
 import { AppHeader } from "@/components/app-header";
@@ -9,6 +9,7 @@ import { CheckoutDialog, type CheckoutResult } from "@/components/pos/checkout-d
 import { ProductGrid } from "@/components/pos/product-grid";
 import { ReceiptDialog } from "@/components/pos/receipt-dialog";
 import { SyncProvider } from "@/components/sync-provider";
+import { runSync } from "@/lib/sync";
 import { useAuth } from "@/hooks/use-auth";
 import { useBarcodeScanner } from "@/hooks/use-barcode-scanner";
 import { useProducts } from "@/hooks/use-products";
@@ -43,6 +44,15 @@ import { completeSale, calculateTotals } from "@/lib/sales";
  * product lands in the cart; neither path double-adds.
  */
 export function PosScreen() {
+  useEffect(() => {
+    void (async () => {
+      try {
+        await runSync();
+      } catch (error) {
+        console.error("POS sync failed:", error);
+      }
+    })();
+  }, []);
   const { session } = useAuth();
   const products = useProducts();
 
