@@ -37,6 +37,8 @@ export function PinLogin() {
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [roster, setRoster] = useState<Roster>("checking");
+  /** True while pulling the staff roster from Supabase into the local DB. */
+  const [loading, setLoading] = useState(true);
   /** Bumped by "Try again" to re-run the roster effect. */
   const [rosterToken, setRosterToken] = useState(0);
   // Failures and lockout live together on purpose: the count only means
@@ -70,6 +72,7 @@ export function PinLogin() {
   useEffect(() => {
     let cancelled = false;
 
+    setLoading(true);
     void (async () => {
       try {
         await fetchPosUsers();
@@ -83,6 +86,7 @@ export function PinLogin() {
         .count();
 
       if (cancelled) return;
+      setLoading(false);
       setRoster(count > 0 ? "ready" : "empty");
     })();
 
@@ -181,7 +185,7 @@ export function PinLogin() {
     inputRef.current?.focus();
   }
 
-  if (roster === "checking") {
+  if (loading) {
     return (
       <div
         role="status"
@@ -189,7 +193,7 @@ export function PinLogin() {
         className="flex flex-col items-center gap-3"
       >
         <Loader2 aria-hidden="true" className="size-6 animate-spin text-muted" />
-        <p className="text-sm text-muted">Looking for staff on this device…</p>
+        <p className="text-sm text-muted">Syncing…</p>
       </div>
     );
   }
@@ -198,6 +202,7 @@ export function PinLogin() {
     return (
       <NoRoster
         onRetry={() => {
+          setLoading(true);
           setRoster("checking");
           setRosterToken((token) => token + 1);
         }}
