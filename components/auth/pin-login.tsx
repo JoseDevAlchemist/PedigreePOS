@@ -105,36 +105,20 @@ export function PinLogin() {
 
   async function submit(candidate: string) {
     if (checking || locked) return;
-
     setChecking(true);
     setError(null);
 
     try {
+      // Temporary direct check for the Manager we inserted in Supabase
       if (candidate === "9999") {
-        // Exact format expected by RequireAuth/useAuth (lib/auth.ts)
-        localStorage.setItem(
-          "pedigree-pos.session",
-          JSON.stringify({
-            id: "temp-manager",
-            name: "Manager",
-            role: "manager",
-            loggedInAt: new Date().toISOString(),
-          }),
-        );
-        window.location.replace("/pos");
-      } else if (candidate === "1111") {
-        localStorage.setItem(
-          "pedigree-pos.session",
-          JSON.stringify({
-            id: "temp-cashier",
-            name: "Cashier",
-            role: "cashier",
-            loggedInAt: new Date().toISOString(),
-          }),
-        );
+        createSession({
+          id: "00000000-0000-0000-0000-000000000000", // Dummy UUID for now
+          name: "Manager",
+          role: "manager"
+        });
         window.location.replace("/pos");
       } else {
-        setError("Invalid PIN");
+        setError("Invalid PIN. Use 9999 to test.");
         setPin("");
       }
     } finally {
