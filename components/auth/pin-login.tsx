@@ -26,7 +26,7 @@ import { fetchPosUsers } from "@/lib/sync";
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 30_000;
 /** Mirrors `PIN_MIN_LENGTH`/`PIN_MAX_LENGTH` in lib/auth.ts for the message. */
-const PIN_HINT = "4 to 6 digits";
+const PIN_HINT = "4 digits";
 
 type Roster = "checking" | "ready" | "empty";
 
@@ -72,10 +72,24 @@ export function PinLogin() {
   useEffect(() => {
     let cancelled = false;
 
-    // TEMPORARY BYPASS: skip sync
-    setRoster("ready");
-    setLoading(false);
-    return;
+    setLoading(true);
+    void (async () => {
+      try {
+        await fetchPosUsers();
+      } catch (error) {
+        console.error("Staff sync failed:", error);
+      }
+
+      const data = await getDb()
+        .pos_users.filter((user) => user.active)
+        .toArray();
+
+      console.log("Staff synced to local DB:", data);
+
+      if (cancelled) return;
+      setLoading(false);
+      setRoster(data.length > 0 ? "ready" : "empty");
+    })();
 
     return () => {
       cancelled = true;
@@ -109,18 +123,44 @@ export function PinLogin() {
     setError(null);
 
     try {
-      // Temporary direct check for the Manager we inserted in Supabase
-      if (candidate === "9999") {
-        createSession({
-          id: "00000000-0000-0000-0000-000000000000", // Dummy UUID for now
-          name: "Manager",
-          role: "manager"
-        });
-        window.location.replace("/pos");
-      } else {
-        setError("Invalid PIN. Use 9999 to test.");
-        setPin("");
+      const users = await getDb()
+        .pos_users.filter((user) => user.active)
+        .toArray();
+
+      // The PIN is the only thing the cashier typed, so the PIN is what
+      // identifies them. Compare until one matches.
+      let matched: (typeof users)[number] | null = null;
+      for (const user of users) {
+        if (await verifyPin(candidate, user.pinHash)) {
+          matched = user;
+          break;
+        }
       }
+
+      if (matched === null) {
+        const failures = gate.failures + 1;
+        setPin("");
+
+        if (failures >= MAX_ATTEMPTS) {
+          setGate({ failures: 0, lockedUntil: Date.now() + LOCKOUT_MS });
+          setNow(Date.now());
+          setError("Too many attempts. Try again in 30 seconds.");
+        } else {
+          setGate({ failures, lockedUntil: 0 });
+          const left = MAX_ATTEMPTS - failures;
+          setError(
+            `That PIN did not match. ${left} ${left === 1 ? "try" : "tries"} left.`,
+          );
+        }
+        return;
+      }
+
+      signIn(
+        createSession({ id: matched.id, name: matched.name, role: matched.role }),
+      );
+      // Hard navigation on purpose: a document request for /pos is served from
+      // the service worker cache, so this works with no network at all.
+      window.location.replace("/pos");
     } finally {
       setChecking(false);
     }
@@ -156,8 +196,17 @@ export function PinLogin() {
     );
   }
 
-  // TEMPORARY BYPASS: never show the "No staff" screen.
-  // if (roster === "empty") { ... }
+  if (roster === "empty") {
+    return (
+      <NoRoster
+        onRetry={() => {
+          setLoading(true);
+          setRoster("checking");
+          setRosterToken((token) => token + 1);
+        }}
+      />
+    );
+  }
 
   return (
     <form
