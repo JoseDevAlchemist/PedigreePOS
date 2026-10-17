@@ -21,7 +21,7 @@ export default function LoginPage() {
     <>
       <SyncProvider />
       <main className="min-h-screen flex flex-1 items-center justify-center flex-col lg:flex-row">
-        <section className="relative hidden flex-1 flex-col justify-between overflow-hidden bg-primary-dark p-12 lg:flex">
+        <section className="relative hidden h-full flex-1 flex-col justify-between overflow-hidden bg-primary-dark p-12 lg:flex">
           {/* The stitch rule, oversized and very low contrast: texture from the
               brand's own vocabulary rather than a decorative gradient. */}
           <div
@@ -47,7 +47,7 @@ export default function LoginPage() {
           </p>
         </section>
 
-        <section className="flex flex-1 items-center justify-center bg-background px-6 py-14">
+        <section className="flex h-full flex-1 items-center justify-center bg-background px-6 py-14">
           <div className="w-full max-w-sm">
             <div className="mb-10 flex justify-center lg:hidden">
               <BrandMark size={56} tagline />

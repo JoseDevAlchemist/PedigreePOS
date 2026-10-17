@@ -111,12 +111,28 @@ export function PinLogin() {
 
     try {
       if (candidate === "9999") {
-        // Force save the session to localStorage in the most common format
-        localStorage.setItem("pos_session", JSON.stringify({ id: "temp-manager", name: "Manager Test", role: "manager" }));
-        window.location.href = "/pos";
+        // Exact format expected by RequireAuth/useAuth (lib/auth.ts)
+        localStorage.setItem(
+          "pedigree-pos.session",
+          JSON.stringify({
+            id: "temp-manager",
+            name: "Manager",
+            role: "manager",
+            loggedInAt: new Date().toISOString(),
+          }),
+        );
+        window.location.replace("/pos");
       } else if (candidate === "1111") {
-        localStorage.setItem("pos_session", JSON.stringify({ id: "temp-cashier", name: "Cashier Test", role: "cashier" }));
-        window.location.href = "/pos";
+        localStorage.setItem(
+          "pedigree-pos.session",
+          JSON.stringify({
+            id: "temp-cashier",
+            name: "Cashier",
+            role: "cashier",
+            loggedInAt: new Date().toISOString(),
+          }),
+        );
+        window.location.replace("/pos");
       } else {
         setError("Invalid PIN");
         setPin("");

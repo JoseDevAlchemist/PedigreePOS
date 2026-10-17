@@ -18,6 +18,9 @@ const manrope = Manrope({
 
 export const metadata: Metadata = {
   applicationName: "Pedigree POS",
+  icons: {
+    icon: "/pedigree-logo.png",
+  },
   title: {
     default: "Pedigree POS",
     template: "%s · Pedigree POS",
