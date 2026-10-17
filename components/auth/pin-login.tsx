@@ -131,6 +131,7 @@ export function PinLogin() {
       // identifies them. Compare until one matches.
       let matched: (typeof users)[number] | null = null;
       for (const user of users) {
+        console.log("Found user in local DB:", user);
         if (await verifyPin(candidate, user.pinHash)) {
           matched = user;
           break;

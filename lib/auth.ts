@@ -81,9 +81,14 @@ export async function hashPin(pin: string): Promise<string> {
  * rather than throwing, so a corrupt roster row cannot crash the login screen.
  */
 export async function verifyPin(pin: string, hash: string): Promise<boolean> {
+  console.log("Attempting login with PIN:", pin);
+  console.log("Hash from DB:", hash);
   try {
-    return await bcrypt.compare(normalizePin(pin), hash);
-  } catch {
+    const match = await bcrypt.compare(normalizePin(pin), hash);
+    console.log("Result of bcrypt.compare:", match);
+    return match;
+  } catch (error) {
+    console.log("Result of bcrypt.compare:", false, error);
     return false;
   }
 }
