@@ -8,9 +8,13 @@
 -- Run once in the Supabase SQL Editor after 014_pos_record_sale.sql. Safe to
 -- run twice — the rows carry fixed ids and `ON CONFLICT DO NOTHING`.
 --
+-- Existing installs with the old demo row should run
+-- 018_pos_rotate_demo_manager_pin.sql as well; the ON CONFLICT above will not
+-- update a PIN that is already present.
+--
 --   name            role      PIN
 --   Brian Otieno    cashier   1234
---   Grace Wanjiru   manager   9999
+--   Grace Wanjiru   manager   4826
 --
 -- The PINs above are the only place they exist in plain text, and they exist
 -- here only so a developer can sign in. These are throwaway demo credentials:
@@ -41,7 +45,7 @@ VALUES
   (
     'a1c9f1e2-0000-4000-8000-000000000002',
     'Grace Wanjiru',
-    '$2b$10$T5fkB916RQUqFbRUKV8r6.zdRqHxR9hsuCSB1ALJ.uzNE17g94BLO',
+    '$2b$10$R0ovDPF9brBujL97lLrUdeTmCrk4CE/yjd/wQBU86rnODsudNYFEq',
     'manager'
   )
 ON CONFLICT (id) DO NOTHING;

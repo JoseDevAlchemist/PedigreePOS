@@ -81,24 +81,9 @@ export async function hashPin(pin: string): Promise<string> {
  * rather than throwing, so a corrupt roster row cannot crash the login screen.
  */
 export async function verifyPin(pin: string, hash: string): Promise<boolean> {
-  console.log("Attempting login with PIN:", pin);
-  console.log("Hash from DB:", hash);
-
-  // TEMPORARY FIX: the hash stored in Supabase is not "9999". Compare against a
-  // freshly generated hash for 9999 so the manager can get in.
-  const correctHash = bcrypt.hashSync("9999", 10);
-  console.log("Correct hash for 9999 is:", correctHash);
-  if (bcrypt.compareSync(normalizePin(pin), correctHash)) {
-    console.log("Result of bcrypt.compare: true");
-    return true;
-  }
-
   try {
-    const match = await bcrypt.compare(normalizePin(pin), hash);
-    console.log("Result of bcrypt.compare:", match);
-    return match;
-  } catch (error) {
-    console.log("Result of bcrypt.compare:", false, error);
+    return await bcrypt.compare(normalizePin(pin), hash);
+  } catch {
     return false;
   }
 }

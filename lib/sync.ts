@@ -8,10 +8,11 @@ import {
   nowIso,
   type LocalProduct,
   type LocalSale,
+  type SyncQueueEntity,
   type SyncQueueEntry,
 } from "@/lib/db";
 import { createClient, getSupabaseConfig, isSupabaseConfigured } from "@/lib/supabase/client";
-import type { Database } from "@/lib/supabase/types";
+import type { Database, Json } from "@/lib/supabase/types";
 
 /**
  * Sync between the till and Supabase.
@@ -163,7 +164,7 @@ function requireClient(): SupabaseClient<Database> {
 }
 
 const PRODUCT_COLUMNS =
-  "id,name,slug,category,barcode,base_price,discount_percent,stock_quantity,active";
+  "id,name,slug,category,barcode,base_price,discount_percent,stock_quantity,active,is_website_published";
 
 /**
  * The catalogue query, with each product's photography folded in.
@@ -200,6 +201,7 @@ interface ProductRow {
   discount_percent: number;
   stock_quantity: number;
   active: boolean;
+  is_website_published: boolean;
   product_colors: ProductColorRow[] | null;
 }
 
@@ -263,6 +265,14 @@ function normalizeImageUrl(raw: string | null): string | null {
 async function pendingStockByProduct(): Promise<Map<string, number>> {
   const db = getDb();
   const unsynced = await db.pos_sales.filter((sale) => sale.syncedAt === null).toArray();
+  // Returns that have not reached the server yet put stock back on the shelf,
+  // so they offset the pending sale decrements. Without this, a catalogue pull
+  // would reset a locally-returned product's stock back down until the return
+  // itself syncs.
+  const unsyncedReturns = await db.sync_queue
+    .where("entity")
+    .equals("return")
+    .toArray();
 
   const byProduct = new Map<string, number>();
   for (const sale of unsynced) {
@@ -271,6 +281,18 @@ async function pendingStockByProduct(): Promise<Map<string, number>> {
       byProduct.set(
         item.productId,
         (byProduct.get(item.productId) ?? 0) + item.quantity,
+      );
+    }
+  }
+  for (const entry of unsyncedReturns) {
+    const items = (entry.payload?.items as
+      | { product_id: string; quantity: number }[]
+      | undefined) ?? [];
+    for (const item of items) {
+      if (!item.product_id) continue;
+      byProduct.set(
+        item.product_id,
+        (byProduct.get(item.product_id) ?? 0) - item.quantity,
       );
     }
   }
@@ -295,34 +317,61 @@ export async function fetchProducts(): Promise<number> {
   if (error) throw new SyncError(`Could not fetch products: ${error.message}`);
 
   const rows = (data ?? []) as unknown as ProductRow[];
-  const pending = await pendingStockByProduct();
   const updatedAt = nowIso();
   const ids = rows.map((row) => row.id);
 
   const db = getDb();
-  await db.transaction("rw", db.products, async () => {
-    const local: LocalProduct[] = rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      slug: row.slug,
-      category: row.category,
-      barcode: row.barcode ?? null,
-      basePrice: row.base_price,
-      discountPercent: row.discount_percent,
-      stockQuantity: Math.max(0, row.stock_quantity - (pending.get(row.id) ?? 0)),
-      active: row.active,
-      imageUrl: pickImageUrl(row.product_colors),
-      updatedAt,
-    }));
+  await db.transaction(
+    "rw",
+    db.products,
+    db.pos_sales,
+    db.sync_queue,
+    async () => {
+      // An empty response is far more likely to be an RLS/configuration failure
+      // than a shop with no catalogue. Never let that wipe a working till.
+      if (rows.length === 0 && (await db.products.count()) > 0) {
+        const message =
+          "Catalogue refresh returned no products; keeping the local catalogue.";
+        setState({ lastNotice: message });
+        console.warn(message);
+        throw new SyncError(message);
+      }
 
-    await db.products.bulkPut(local);
+      // Read pending work inside the same transaction as the write. A return
+      // that commits before this point is included in the delta; one that
+      // arrives after it waits for the pull and then increments the fresh
+      // stock, instead of being overwritten.
+      const pending = await pendingStockByProduct();
+      const local: LocalProduct[] = rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        category: row.category,
+        barcode: row.barcode ?? null,
+        basePrice: row.base_price,
+        discountPercent: row.discount_percent,
+        stockQuantity: Math.max(
+          0,
+          row.stock_quantity - (pending.get(row.id) ?? 0),
+        ),
+        active: row.active,
+        imageUrl: pickImageUrl(row.product_colors),
+        updatedAt,
+        // The local catalogue doesn't carry colour names yet; they are captured
+        // when a manager adds a product from the till.
+        colors: [],
+        isWebsitePublished: row.is_website_published ?? false,
+      }));
 
-    if (ids.length === 0) {
-      await db.products.clear();
-    } else {
-      await db.products.where("id").noneOf(ids).delete();
-    }
-  });
+      await db.products.bulkPut(local);
+
+      if (ids.length === 0) {
+        await db.products.clear();
+      } else {
+        await db.products.where("id").noneOf(ids).delete();
+      }
+    },
+  );
 
   return rows.length;
 }
@@ -427,6 +476,133 @@ async function pushSale(
   if (error) {
     throw new SyncError(`Sale ${sale.clientUuid}: ${error.message}`);
   }
+}
+
+/**
+ * Push one queued product to the catalogue.
+ *
+ * Upserts on the product's id, so a product created on the till and then
+ * re-synced is updated in place rather than duplicated. The image and colours
+ * live in separate tables this till does not write, so only the product row
+ * itself is pushed here; `is_website_published` is included so a product a
+ * manager explicitly published can go live, and defaults to false so a new
+ * product never accidentally reaches the storefront.
+ */
+async function pushProduct(
+  supabase: SupabaseClient<Database>,
+  product: LocalProduct,
+): Promise<void> {
+  const { error } = await supabase.from("products").upsert(
+    {
+      id: product.id,
+      name: product.name,
+      slug: product.slug,
+      category: product.category,
+      barcode: product.barcode,
+      base_price: product.basePrice,
+      base_price_usd: null,
+      discount_percent: product.discountPercent,
+      stock_quantity: product.stockQuantity,
+      active: product.active,
+      is_website_published: product.isWebsitePublished,
+    },
+    { onConflict: "id" },
+  );
+
+  if (error) {
+    throw new SyncError(`Product ${product.name}: ${error.message}`);
+  }
+}
+
+/**
+ * Push every queued product.
+ */
+export async function syncProducts(): Promise<{
+  synced: number;
+  failed: number;
+}> {
+  const supabase = requireClient();
+  const db = getDb();
+
+  const entries = await db.sync_queue.where("entity").equals("product").toArray();
+  let synced = 0;
+  let failed = 0;
+
+  for (const entry of entries) {
+    const product = await db.products.get(entry.entityId);
+
+    // The product is gone, or already landed. Either way the queue entry is stale.
+    if (!product) {
+      if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
+      continue;
+    }
+
+    try {
+      await pushProduct(supabase, product);
+      if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
+      synced += 1;
+    } catch (error) {
+      await recordFailure(entry, error);
+      failed += 1;
+    }
+  }
+
+  return { synced, failed };
+}
+
+/**
+ * Push one queued return. A return reverses a sale's stock decrement on the
+ * server: it records the return and re-increments the affected products.
+ */
+async function pushReturn(
+  supabase: SupabaseClient<Database>,
+  entry: SyncQueueEntry,
+): Promise<void> {
+  // The queue payload is untyped (`Record<string, unknown>`), so each field is
+  // cast to the shape `recordReturn` wrote. The keys match the snake_case
+  // payload that lib/returns.ts stores.
+  const payload = (entry.payload ?? {}) as Record<string, unknown>;
+  const { error } = await supabase.rpc("pos_record_return", {
+    p_client_uuid: entry.entityId,
+    p_original_sale_id: (payload.original_sale_id as string) ?? null,
+    p_cashier_id: (payload.cashier_id as string) ?? null,
+    p_cashier_name: (payload.cashier_name as string) ?? "",
+    p_manager_id: (payload.manager_id as string) ?? null,
+    p_manager_name: (payload.manager_name as string) ?? "",
+    p_items: (payload.items ?? []) as unknown as Json,
+  });
+
+  if (error) {
+    throw new SyncError(`Return ${entry.entityId}: ${error.message}`);
+  }
+}
+
+/**
+ * Push every queued return.
+ */
+export async function syncReturns(): Promise<{
+  synced: number;
+  failed: number;
+}> {
+  const supabase = requireClient();
+  const db = getDb();
+
+  const entries = await db.sync_queue.where("entity").equals("return").toArray();
+  let synced = 0;
+  let failed = 0;
+
+  for (const entry of entries) {
+    try {
+      await pushReturn(supabase, entry);
+      if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
+      synced += 1;
+    } catch (error) {
+      await recordFailure(entry, error);
+      failed += 1;
+    }
+  }
+
+  return { synced, failed };
 }
 
 async function recordFailure(
@@ -595,6 +771,26 @@ export async function runSync(): Promise<SyncSummary> {
       errors.push(messageOf(error));
     }
 
+    // Stock corrections: returns and newly added products go up before the
+    // catalogue is refreshed, so a pull never overwrites a local change.
+    try {
+      const result = await syncReturns();
+      if (result.failed > 0) {
+        notices.push(`${result.failed} return(s) could not be sent.`);
+      }
+    } catch (error) {
+      notices.push(messageOf(error));
+    }
+
+    try {
+      const result = await syncProducts();
+      if (result.failed > 0) {
+        notices.push(`${result.failed} product(s) could not be sent.`);
+      }
+    } catch (error) {
+      notices.push(messageOf(error));
+    }
+
     try {
       products = await fetchProducts();
     } catch (error) {
@@ -643,6 +839,34 @@ export async function runSync(): Promise<SyncSummary> {
     pending,
     errors: [...errors, ...notices],
   };
+}
+
+/**
+ * Append a job to the sync queue and refresh the pending count.
+ *
+ * A small shared helper so sales, returns, products and receipt emails all
+ * write the queue the same way.
+ */
+export async function addSyncQueueEntry(input: {
+  entity: SyncQueueEntity;
+  entityId: string;
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}): Promise<void> {
+  const db = getDb();
+  const now = input.updatedAt;
+  await db.sync_queue.add({
+    entity: input.entity,
+    entityId: input.entityId,
+    status: "pending",
+    attempts: 0,
+    lastError: null,
+    payload: input.payload,
+    createdAt: input.createdAt,
+    updatedAt: now,
+  });
+  await countPending();
 }
 
 /**

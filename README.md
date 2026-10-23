@@ -19,12 +19,12 @@ Sign in with a PIN on the keypad. With the demo seed applied:
 | Name          | Role    | PIN    |
 | ------------- | ------- | ------ |
 | Brian Otieno  | cashier | `1234` |
-| Grace Wanjiru | manager | `9999` |
+| Grace Wanjiru | manager | `4826` |
 
-> These are throwaway demo credentials, and `1234`/`9999` are the only place the
+> These are throwaway demo credentials, and `1234`/`4826` are the only place the
 > PINs exist in plain text. Change them before the till sees real money —
 > `supabase/pos_seed.sql` explains how, and how to generate a hash properly
-> rather than hand-writing one.
+> rather than hand-writing one. `9999` is deliberately not a valid PIN.
 
 ---
 

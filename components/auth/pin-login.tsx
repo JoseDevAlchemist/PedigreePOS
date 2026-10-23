@@ -6,7 +6,6 @@ import { Delete, Loader2, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import {
   createSession,
-  isValidPinFormat,
   normalizePin,
   PIN_MAX_LENGTH,
   verifyPin,
@@ -25,8 +24,6 @@ import { fetchPosUsers } from "@/lib/sync";
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 30_000;
-/** Mirrors `PIN_MIN_LENGTH`/`PIN_MAX_LENGTH` in lib/auth.ts for the message. */
-const PIN_HINT = "4 digits";
 
 type Roster = "checking" | "ready" | "empty";
 
@@ -72,8 +69,10 @@ export function PinLogin() {
   useEffect(() => {
     let cancelled = false;
 
-    setLoading(true);
     void (async () => {
+      // Set loading inside the async callback so this effect does not call
+      // setState synchronously during its own execution.
+      setLoading(true);
       try {
         await fetchPosUsers();
       } catch (error) {
@@ -83,8 +82,6 @@ export function PinLogin() {
       const data = await getDb()
         .pos_users.filter((user) => user.active)
         .toArray();
-
-      console.log("Staff synced to local DB:", data);
 
       if (cancelled) return;
       setLoading(false);
@@ -123,16 +120,6 @@ export function PinLogin() {
     setError(null);
 
     try {
-      // TEMPORARY FIX: the Supabase hash for 9999 is wrong, so admit the
-      // manager directly.
-      if (candidate === "9999") {
-        signIn(
-          createSession({ id: "temp-manager-id", name: "Manager", role: "manager" }),
-        );
-        window.location.replace("/pos");
-        return;
-      }
-
       const users = await getDb()
         .pos_users.filter((user) => user.active)
         .toArray();
@@ -141,7 +128,6 @@ export function PinLogin() {
       // identifies them. Compare until one matches.
       let matched: (typeof users)[number] | null = null;
       for (const user of users) {
-        console.log("Found user in local DB:", user);
         if (await verifyPin(candidate, user.pinHash)) {
           matched = user;
           break;
@@ -225,9 +211,9 @@ export function PinLogin() {
         event.preventDefault();
         void submit(pin);
       }}
-      className="w-full max-w-sm"
+      className="w-full max-w-sm flex flex-col items-center"
     >
-      <header className="text-center">
+      <header className="text-center w-full">
         <h1 className="font-serif text-3xl font-semibold tracking-tight text-foreground">
           Enter your PIN
         </h1>
@@ -236,7 +222,7 @@ export function PinLogin() {
         </p>
       </header>
 
-      <div className="mt-8">
+      <div className="mt-10 flex flex-col items-center w-full">
         {/* The real control, rendered invisible so the dots below can be the
             visual while a physical keyboard and a password manager both keep
             working through the native input. */}
@@ -268,7 +254,7 @@ export function PinLogin() {
         <div
           aria-hidden="true"
           onClick={() => inputRef.current?.focus()}
-          className="flex cursor-text justify-center gap-3"
+          className="mt-2 flex cursor-text justify-center gap-3"
         >
           {Array.from({ length: PIN_MAX_LENGTH }).map((_, index) => {
             const filled = index < pin.length;
@@ -284,7 +270,7 @@ export function PinLogin() {
           })}
         </div>
 
-        <div className="mt-3 min-h-6 text-center">
+        <div className="mt-4 min-h-6 w-full text-center">
           {locked ? (
             <p role="alert" className="text-sm font-medium text-danger">
               Locked — {Math.ceil((gate.lockedUntil - now) / 1000)}s
@@ -301,7 +287,9 @@ export function PinLogin() {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-4 mx-auto max-w-sm md:gap-6">
+      {/* A perfect 3x4 grid: twelve keys, every row the same height, every
+          button the same size, with a clear hover and press state. */}
+      <div className="mt-8 grid grid-cols-3 gap-4 w-full max-w-xs md:gap-6 md:max-w-sm">
         {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((digit) => (
           <KeypadButton key={digit} onClick={() => press(digit)} disabled={locked}>
             {digit}
@@ -351,7 +339,7 @@ function KeypadButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
-      className="h-16 rounded-2xl border border-border bg-card text-2xl font-semibold text-foreground shadow-card transition-[transform,background-color,border-color] duration-150 hover:border-primary/40 hover:bg-well focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40"
+      className="h-16 rounded-2xl border border-border bg-card text-2xl font-semibold text-foreground shadow-card transition-[transform,background-color,border-color] duration-150 hover:bg-primary/10 hover:border-primary/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40"
     >
       {children}
     </button>

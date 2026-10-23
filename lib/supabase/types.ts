@@ -30,6 +30,7 @@ export type Database = {
           discount_percent: number;
           featured: boolean;
           id: string;
+          is_website_published: boolean;
           name: string;
           slug: string;
           stock_quantity: number;
@@ -45,6 +46,7 @@ export type Database = {
           discount_percent?: number;
           featured?: boolean;
           id?: string;
+          is_website_published?: boolean;
           name: string;
           slug: string;
           stock_quantity?: number;
@@ -60,6 +62,7 @@ export type Database = {
           discount_percent?: number;
           featured?: boolean;
           id?: string;
+          is_website_published?: boolean;
           name?: string;
           slug?: string;
           stock_quantity?: number;
@@ -204,6 +207,18 @@ export type Database = {
           sale_count: number;
           gross_kes: number;
         }[];
+      };
+      pos_record_return: {
+        Args: {
+          p_client_uuid: string;
+          p_original_sale_id: string | null;
+          p_cashier_id: string | null;
+          p_cashier_name: string;
+          p_manager_id: string | null;
+          p_manager_name: string;
+          p_items: Json;
+        };
+        Returns: boolean;
       };
     };
     Enums: {

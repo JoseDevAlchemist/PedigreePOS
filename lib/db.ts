@@ -51,6 +51,10 @@ export interface LocalProduct {
   imageUrl: string | null;
   /** When this row was last pulled from Supabase. */
   updatedAt: string;
+  /** Colourways chosen when the product was added locally (names, e.g. "Black"). */
+  colors: string[];
+  /** Whether the product may be published to the storefront. Defaults false. */
+  isWebsitePublished: boolean;
 }
 
 export interface LocalPosUser {
@@ -106,7 +110,7 @@ export interface LocalSale {
   items: LocalSaleItem[];
 }
 
-export type SyncQueueEntity = "sale" | "receipt_email";
+export type SyncQueueEntity = "sale" | "receipt_email" | "return" | "product";
 export type SyncQueueStatus = "pending" | "error";
 
 /**

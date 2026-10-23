@@ -1,13 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { Search, X } from "lucide-react";
+import { Search, Undo2, X } from "lucide-react";
 
 import { AppHeader } from "@/components/app-header";
 import { CartPanel } from "@/components/pos/cart-panel";
 import { CheckoutDialog, type CheckoutResult } from "@/components/pos/checkout-dialog";
 import { ProductGrid } from "@/components/pos/product-grid";
 import { ReceiptDialog } from "@/components/pos/receipt-dialog";
+import { ReturnDialog } from "@/components/pos/return-dialog";
+import { ReturnPinDialog } from "@/components/pos/return-pin-dialog";
 import { SyncProvider } from "@/components/sync-provider";
 import { runSync } from "@/lib/sync";
 import { useAuth } from "@/hooks/use-auth";
@@ -67,6 +69,24 @@ export function PosScreen() {
   const [saving, setSaving] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [completedSale, setCompletedSale] = useState<LocalSale | null>(null);
+
+  // Returns need a manager's approval before stock can go back up.
+  const [returnPinOpen, setReturnPinOpen] = useState(false);
+  const [returnOpen, setReturnOpen] = useState(false);
+  const [returnManager, setReturnManager] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+
+  function handleManagerApproved(manager: { id: string; name: string }) {
+    setReturnManager(manager);
+    setReturnPinOpen(false);
+    setReturnOpen(true);
+  }
+
+  function handleReturnComplete() {
+    setReturnOpen(false);
+    setReturnManager(null);
+  }
 
   const totals = useMemo(
     () => calculateTotals(cartToCheckoutLines(cart), cart.discountPercent),
@@ -243,6 +263,18 @@ export function PosScreen() {
                 </p>
               )}
             </div>
+
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setReturnPinOpen(true)}
+                disabled={session === null}
+                className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-muted transition-colors hover:bg-well hover:text-danger hover:border-danger/40 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+                <Undo2 aria-hidden="true" className="size-4" />
+                Return / Refund
+              </button>
+            </div>
           </div>
 
           <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pe-1 scrollbar-none">
@@ -282,6 +314,19 @@ export function PosScreen() {
         sale={completedSale}
         open={completedSale !== null}
         onClose={() => setCompletedSale(null)}
+      />
+
+      <ReturnPinDialog
+        open={returnPinOpen}
+        onClose={() => setReturnPinOpen(false)}
+        onApprove={handleManagerApproved}
+      />
+
+      <ReturnDialog
+        open={returnOpen}
+        onClose={() => setReturnOpen(false)}
+        manager={returnManager ?? { id: "", name: "" }}
+        onReturnComplete={handleReturnComplete}
       />
     </>
   );
