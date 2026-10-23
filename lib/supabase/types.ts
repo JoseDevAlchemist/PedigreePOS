@@ -2,9 +2,9 @@
  * A hand-written subset of the generated Supabase types.
  *
  * The storefront has a 500-line `types.ts` generated from the whole schema. The
- * till touches five tables and one function, so this is the slice it actually
- * needs: less to keep in step, and `select()` on anything else is a type error
- * rather than a runtime surprise.
+ * till touches five tables and the handful of RPCs it calls, so this is the
+ * slice it actually needs: less to keep in step, and `select()` on anything
+ * else is a type error rather than a runtime surprise.
  */
 
 export type Json =
@@ -182,6 +182,20 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      pos_create_product: {
+        Args: {
+          p_id: string;
+          p_name: string;
+          p_slug: string;
+          p_category: string;
+          p_barcode: string | null;
+          p_base_price: number;
+          p_discount_percent: number;
+          p_stock_quantity: number;
+          p_is_website_published: boolean;
+        };
+        Returns: boolean;
+      };
       pos_record_sale: {
         Args: {
           p_client_uuid: string;

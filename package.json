@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:rls": "supabase test db --local supabase/tests/phase1_server_boundaries.sql"
   },
   "dependencies": {
     "@serwist/next": "^9.5.13",

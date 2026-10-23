@@ -523,7 +523,9 @@ Migrations `001–011` are storefront-owned mirrors. Do not edit them here.
 | `014_pos_record_sale.sql` | `pos_record_sale` — the only sale write path; drops direct insert policies | **yes** |
 | `015_pos_card_payments.sql` | Allows `card`; `mpesa_code` doubles as card reference | **yes** |
 | `016_pos_staff_enrolment.sql` | Anon may insert active `cashier` rows only | **yes** |
-| `017_pos_returns.sql` | `products.is_website_published`, `pos_returns`, `pos_return_items`, `pos_record_return` | **yes** (uncommitted) |
+| `017_pos_returns.sql` | `products.is_website_published`, `pos_returns`, `pos_return_items`, `pos_record_return` | **yes** |
+| `018_pos_rotate_demo_manager_pin.sql` | Rotates the seeded demo manager PIN away from `9999` | **yes** |
+| `019_pos_product_creation.sql` | `pos_create_product`; FK-safe returns; drops direct return writes | **yes** |
 
 > The repository has no `005` migration. That is historical; do not renumber.
 
@@ -2321,6 +2323,11 @@ money/stock bugs before any new feature adds more state.
 4. Update `lib/supabase/types.ts` for the new RPC.
 5. Add an RLS test script that runs as `anon`: product insert denied, RPC
    allowed, direct return insert denied, RPC allowed.
+
+**Status:** items 1–5 are implemented in `019_pos_product_creation.sql`,
+`lib/supabase/types.ts` and `supabase/tests/phase1_server_boundaries.sql`.
+Run the boundary checks with `pnpm test:rls` (local Supabase must be running).
+`pushProduct` still uses the old direct upsert until Phase 2.
 
 ### Phase 2 — Feature C complete
 

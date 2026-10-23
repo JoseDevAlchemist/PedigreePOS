@@ -36,6 +36,7 @@ Sign in with a PIN on the keypad. With the demo seed applied:
 | `pnpm build` | Production build (webpack)       |
 | `pnpm start` | Serve the production build       |
 | `pnpm lint`  | ESLint, including `react-hooks`  |
+| `pnpm test:rls` | Phase 1 anon boundary tests for a local Supabase |
 
 **The `--webpack` flag is not decoration.** Next 16 builds with Turbopack by
 default, and the PWA layer is [`@serwist/next`](https://serwist.pages.dev) — a
@@ -73,7 +74,11 @@ supabase/
                       014      pos_record_sale — the only write path
                       015      card as a third payment method
                       016      cashier enrolment from the manager screen
+                      017      returns, return lines, and website publishing flag
+                      018      rotate the demo manager PIN away from 9999
+                      019      safe product creation, FK-safe returns, anon boundaries
   pos_seed.sql        demo staff (optional, not a migration)
+  tests/              pgTAP RLS checks for the anon boundaries
   config.toml         CLI config for this project
 ```
 
@@ -84,7 +89,7 @@ storefront, re-mirror, and let this repo stay a follower.
 
 ```bash
 npx supabase link --project-ref <ref>   # once
-npx supabase db push                    # applies 012–014
+npx supabase db push                    # applies 012–019
 npx supabase db push --include-seed     # also inserts the demo staff
 ```
 
@@ -100,11 +105,14 @@ it can reach, and nothing else does:
 | `SELECT pos_users`          | bcrypt hashes, so a PIN can be checked offline (see below) |
 | `INSERT pos_users`          | enrolling a cashier — `role = 'cashier'` only (016)    |
 | `CALL pos_record_sale(...)` | record one sale, its lines and its stock decrement     |
+| `CALL pos_create_product(...)` | insert one till-created product, validated by the RPC |
+| `CALL pos_record_return(...)` | record a return, its lines and the stock correction   |
 | `CALL pos_daily_totals()`   | aggregate takings, for the manager view                |
 
-It **cannot read a sale back**, and it cannot write the catalogue. See
-`supabase/migrations/012_pos.sql`, `015_pos_card_payments.sql` and
-`016_pos_staff_enrolment.sql`.
+It **cannot read a sale back**, and it cannot write `products`,
+`pos_returns` or `pos_return_items` directly. See
+`supabase/migrations/012_pos.sql`, `014_pos_record_sale.sql` and
+`019_pos_product_creation.sql`.
 
 ### Why recording a sale is a function, not an upsert
 
