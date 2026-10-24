@@ -3,8 +3,9 @@
 > **Status:** definitive architecture guide and implementation roadmap.
 > **Baseline:** `main` at `49e671a`, with Phases 0–3 implemented on the local
 > stacked branches `phase-0-money-safety`, `phase-1-server-boundaries`,
-> `phase-2-feature-c` and `phase-3-returns-ledger`. Remote rollout is still
-> pending; the local Supabase project has migrations through `020`.
+> `phase-2-feature-c` and `phase-3-returns-ledger`. Both the local and linked
+> Supabase projects have migrations through `020`; the offline/browser run-
+> through is still pending.
 > **Audience:** any engineer adding a feature to this till.
 > **Rule:** this document describes the system as it is. Where code and comments
 > disagree, the code wins, and the drift is called out explicitly.
