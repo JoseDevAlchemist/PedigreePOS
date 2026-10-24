@@ -178,7 +178,7 @@ const PRODUCT_COLUMNS =
  * parser needs that metadata to describe an embedded select. The select string
  * is the contract; `ProductRow` below is what it returns.
  */
-const PRODUCTS_WITH_IMAGES = `${PRODUCT_COLUMNS},product_colors(sort_order,product_images(angle,image_url,sort_order))`;
+const PRODUCTS_WITH_IMAGES = `${PRODUCT_COLUMNS},product_colors(color_name,sort_order,product_images(angle,image_url,sort_order))`;
 
 interface ProductImageRow {
   angle: string | null;
@@ -187,8 +187,25 @@ interface ProductImageRow {
 }
 
 interface ProductColorRow {
+  color_name: string;
   sort_order: number | null;
   product_images: ProductImageRow[] | null;
+}
+
+/**
+ * Colourway names in their merchandised order.
+ *
+ * The till used to ignore server colours entirely, so a storefront product's
+ * colour list was blank and a POS-created product's local list was wiped on the
+ * next pull. Both cases now read from the same place, with the local list kept
+ * as the fallback when the server has no colours yet (the POS does not write
+ * `product_colors`).
+ */
+function pickColors(colors: ProductColorRow[] | null): string[] {
+  return [...(colors ?? [])]
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    .map((color) => color.color_name)
+    .filter((name): name is string => typeof name === "string" && name.trim() !== "");
 }
 
 interface ProductRow {
@@ -305,6 +322,13 @@ async function pendingStockByProduct(): Promise<Map<string, number>> {
  * Stock is written as `server − pending`, not as `server`. Inactive products
  * are removed: `active = false` means "not for sale", so it has no place on a
  * till. A product that comes back is re-fetched; nothing is lost.
+ *
+ * A product with a queued create call is the exception to "the server is
+ * authoritative": it is kept even when absent from the response, and its
+ * till-only fields (image, colours) are merged over the server row. The same
+ * fallback applies after the queue clears, because the POS does not upload
+ * images or colours yet; otherwise a successful push would still erase them on
+ * the next pull.
  */
 export async function fetchProducts(): Promise<number> {
   const supabase = requireClient();
@@ -342,34 +366,67 @@ export async function fetchProducts(): Promise<number> {
       // arrives after it waits for the pull and then increments the fresh
       // stock, instead of being overwritten.
       const pending = await pendingStockByProduct();
-      const local: LocalProduct[] = rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        slug: row.slug,
-        category: row.category,
-        barcode: row.barcode ?? null,
-        basePrice: row.base_price,
-        discountPercent: row.discount_percent,
-        stockQuantity: Math.max(
-          0,
-          row.stock_quantity - (pending.get(row.id) ?? 0),
+
+      // A product with a queue entry has not necessarily reached the server.
+      // It must not be deleted just because the server response does not list
+      // it, and its local-only fields must survive the merge below.
+      const pendingProductIds = new Set(
+        (await db.sync_queue.where("entity").equals("product").toArray()).map(
+          (entry) => entry.entityId,
         ),
-        active: row.active,
-        imageUrl: pickImageUrl(row.product_colors),
-        updatedAt,
-        // The local catalogue doesn't carry colour names yet; they are captured
-        // when a manager adds a product from the till.
-        colors: [],
-        isWebsitePublished: row.is_website_published ?? false,
-      }));
+      );
+
+      const previousById = new Map<string, LocalProduct>();
+      for (const product of await db.products.bulkGet(ids)) {
+        if (product) previousById.set(product.id, product);
+      }
+
+      const local: LocalProduct[] = rows.map((row) => {
+        const previous = previousById.get(row.id);
+        const isPending = pendingProductIds.has(row.id);
+        const serverColors = pickColors(row.product_colors);
+        const pendingDelta = pending.get(row.id) ?? 0;
+
+        return {
+          id: row.id,
+          name: row.name,
+          slug: row.slug,
+          category: row.category,
+          barcode: row.barcode ?? null,
+          basePrice: row.base_price,
+          discountPercent: row.discount_percent,
+          // A pending product's local count is the source of truth until its
+          // create RPC lands. For a synced product, the server is authoritative
+          // except for sales and returns this till has not pushed yet.
+          stockQuantity: isPending
+            ? (previous?.stockQuantity ??
+              Math.max(0, row.stock_quantity - pendingDelta))
+            : Math.max(0, row.stock_quantity - pendingDelta),
+          active: row.active,
+          // The server image wins when it exists; otherwise keep the resized
+          // local image. POS-created images are intentionally till-only until
+          // a signed upload path exists.
+          imageUrl: pickImageUrl(row.product_colors) ?? previous?.imageUrl ?? null,
+          updatedAt,
+          // Colours are now read from the server when present. The POS RPC does
+          // not write product_colors, so a locally chosen list is the fallback.
+          colors: serverColors.length > 0 ? serverColors : (previous?.colors ?? []),
+          isWebsitePublished: isPending
+            ? (previous?.isWebsitePublished ?? row.is_website_published ?? false)
+            : (row.is_website_published ?? false),
+        };
+      });
 
       await db.products.bulkPut(local);
 
-      if (ids.length === 0) {
-        await db.products.clear();
-      } else {
-        await db.products.where("id").noneOf(ids).delete();
-      }
+      // Keep local products whose create call is still queued. Without this,
+      // a product created offline disappears on the next catalogue refresh.
+      const deletable =
+        ids.length === 0
+          ? await db.products.toCollection().primaryKeys()
+          : await db.products.where("id").noneOf(ids).primaryKeys();
+      const toDelete = deletable.filter((id) => !pendingProductIds.has(id));
+      if (toDelete.length > 0) await db.products.bulkDelete(toDelete);
     },
   );
 
@@ -481,34 +538,46 @@ async function pushSale(
 /**
  * Push one queued product to the catalogue.
  *
- * Upserts on the product's id, so a product created on the till and then
- * re-synced is updated in place rather than duplicated. The image and colours
- * live in separate tables this till does not write, so only the product row
- * itself is pushed here; `is_website_published` is included so a product a
- * manager explicitly published can go live, and defaults to false so a new
- * product never accidentally reaches the storefront.
+ * `pos_create_product` is the only way in: `products` has no INSERT policy for
+ * anon, so a direct upsert fails with RLS. The function is insert-only and
+ * idempotent on the client-generated id, which is what makes a retry after a
+ * timeout safe. It does not touch `base_price_usd`, so a USD price set in the
+ * admin is never nulled by a POS push.
+ *
+ * The image and colourways are local-only for now. They live in IndexedDB and
+ * are never part of this call; the storefront still gets the product row.
+ *
+ * `pendingStockDelta` is the net unsynced sale/return quantity for this
+ * product. It reconstructs the stock the server should be born with: the local
+ * row has already been decremented/incremented by those events, and they will
+ * be applied to the server later, so adding the delta keeps the two in step
+ * after they sync. Without it, a sale made before the product reaches the
+ * server is counted twice.
  */
 async function pushProduct(
   supabase: SupabaseClient<Database>,
   product: LocalProduct,
+  pendingStockDelta: number,
 ): Promise<void> {
-  const { error } = await supabase.from("products").upsert(
-    {
-      id: product.id,
-      name: product.name,
-      slug: product.slug,
-      category: product.category,
-      barcode: product.barcode,
-      base_price: product.basePrice,
-      base_price_usd: null,
-      discount_percent: product.discountPercent,
-      stock_quantity: product.stockQuantity,
-      active: product.active,
-      is_website_published: product.isWebsitePublished,
-    },
-    { onConflict: "id" },
+  const stockAtServerCreation = Math.max(
+    0,
+    product.stockQuantity + pendingStockDelta,
   );
 
+  const { error } = await supabase.rpc("pos_create_product", {
+    p_id: product.id,
+    p_name: product.name,
+    p_slug: product.slug,
+    p_category: product.category,
+    p_barcode: product.barcode,
+    p_base_price: product.basePrice,
+    p_discount_percent: product.discountPercent,
+    p_stock_quantity: stockAtServerCreation,
+    p_is_website_published: product.isWebsitePublished,
+  });
+
+  // A false result means the row already exists: this is a replay, not a
+  // failure. Both outcomes mean the server has the product.
   if (error) {
     throw new SyncError(`Product ${product.name}: ${error.message}`);
   }
@@ -516,6 +585,12 @@ async function pushProduct(
 
 /**
  * Push every queued product.
+ *
+ * The queue entries, the live product rows and the pending stock snapshot are
+ * read in one Dexie transaction. A sale that commits before that read is
+ * included in both the local stock and the delta; one that commits after it is
+ * not included in either and will be applied to the server later. Reading them
+ * separately would let a sale slip between the two reads and be counted twice.
  */
 export async function syncProducts(): Promise<{
   synced: number;
@@ -524,12 +599,30 @@ export async function syncProducts(): Promise<{
   const supabase = requireClient();
   const db = getDb();
 
-  const entries = await db.sync_queue.where("entity").equals("product").toArray();
+  const snapshot = await db.transaction(
+    "r",
+    db.products,
+    db.pos_sales,
+    db.sync_queue,
+    async () => {
+      const entries = await db.sync_queue
+        .where("entity")
+        .equals("product")
+        .toArray();
+      const products = await db.products.bulkGet(
+        entries.map((entry) => entry.entityId),
+      );
+      const pending = await pendingStockByProduct();
+      return { entries, products, pending };
+    },
+  );
+
   let synced = 0;
   let failed = 0;
 
-  for (const entry of entries) {
-    const product = await db.products.get(entry.entityId);
+  for (let index = 0; index < snapshot.entries.length; index += 1) {
+    const entry = snapshot.entries[index];
+    const product = snapshot.products[index];
 
     // The product is gone, or already landed. Either way the queue entry is stale.
     if (!product) {
@@ -538,7 +631,11 @@ export async function syncProducts(): Promise<{
     }
 
     try {
-      await pushProduct(supabase, product);
+      await pushProduct(
+        supabase,
+        product,
+        snapshot.pending.get(product.id) ?? 0,
+      );
       if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
       synced += 1;
     } catch (error) {
@@ -624,24 +721,48 @@ async function recordFailure(
  *
  * Failures are recorded on the queue entry and the loop continues: one bad sale
  * must not hold up the rest of the day's takings.
+ *
+ * A sale that references a product whose create call is still queued is
+ * *deferred*, not failed: its foreign key cannot exist on the server yet.
+ * `runSync` retries the returned ids after `syncProducts` in the same pass, so a
+ * product created and sold offline does not raise a false money alarm.
  */
-export async function syncSales(): Promise<{
+export async function syncSales(options: {
+  skipProductIds?: Set<string>;
+  onlySaleIds?: Set<string>;
+} = {}): Promise<{
   synced: number;
   failed: number;
+  deferred: string[];
 }> {
   const supabase = requireClient();
   const db = getDb();
 
   const entries = await db.sync_queue.where("entity").equals("sale").toArray();
+  const skipProductIds = options.skipProductIds ?? new Set<string>();
   let synced = 0;
   let failed = 0;
+  const deferred: string[] = [];
 
   for (const entry of entries) {
+    if (options.onlySaleIds && !options.onlySaleIds.has(entry.entityId)) {
+      continue;
+    }
+
     const sale = await db.pos_sales.get(entry.entityId);
 
     // The sale is gone, or already landed. Either way the queue entry is stale.
     if (!sale || sale.syncedAt !== null) {
       if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
+      continue;
+    }
+
+    if (
+      sale.items.some(
+        (item) => item.productId !== null && skipProductIds.has(item.productId),
+      )
+    ) {
+      deferred.push(entry.entityId);
       continue;
     }
 
@@ -656,7 +777,7 @@ export async function syncSales(): Promise<{
     }
   }
 
-  return { synced, failed };
+  return { synced, failed, deferred };
 }
 
 /**
@@ -757,13 +878,31 @@ export async function runSync(): Promise<SyncSummary> {
   let products = 0;
   let users = 0;
   let emails = 0;
+  let deferredSaleIds: string[] = [];
+  let productSyncFinished = false;
 
   if (isSupabaseConfigured()) {
-    // Money first.
+    // Money first. A sale for a product that has not reached the server yet
+    // cannot satisfy its foreign key, so defer it and retry after
+    // `syncProducts` below instead of recording a false failure.
+    const db = getDb();
+    const pendingProductIds = new Set<string>();
     try {
-      const result = await syncSales();
+      for (const entry of await db.sync_queue
+        .where("entity")
+        .equals("product")
+        .toArray()) {
+        pendingProductIds.add(entry.entityId);
+      }
+    } catch (error) {
+      notices.push(messageOf(error));
+    }
+
+    try {
+      const result = await syncSales({ skipProductIds: pendingProductIds });
       syncedSales = result.synced;
       failedSales = result.failed;
+      deferredSaleIds = result.deferred;
       if (result.failed > 0) {
         errors.push(`${result.failed} sale(s) could not be sent.`);
       }
@@ -784,11 +923,30 @@ export async function runSync(): Promise<SyncSummary> {
 
     try {
       const result = await syncProducts();
+      productSyncFinished = true;
       if (result.failed > 0) {
         notices.push(`${result.failed} product(s) could not be sent.`);
       }
     } catch (error) {
       notices.push(messageOf(error));
+    }
+
+    // The products those deferred sales needed now exist (or the push failed,
+    // in which case this attempt is a real failure). Retry only the deferred
+    // sales so unrelated failures are not counted twice in one pass.
+    if (productSyncFinished && deferredSaleIds.length > 0) {
+      try {
+        const result = await syncSales({
+          onlySaleIds: new Set(deferredSaleIds),
+        });
+        syncedSales += result.synced;
+        failedSales += result.failed;
+        if (result.failed > 0) {
+          errors.push(`${result.failed} sale(s) could not be sent.`);
+        }
+      } catch (error) {
+        errors.push(messageOf(error));
+      }
     }
 
     try {

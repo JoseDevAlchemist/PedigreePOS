@@ -44,14 +44,13 @@ export interface LocalProduct {
   stockQuantity: number;
   active: boolean;
   /**
-   * A URL for the product's first photograph, resolved from `product_images`
-   * at sync time. Null when the product has no photography — the card then
-   * draws its own placeholder rather than an empty frame.
+   * A URL or a resized data URL. Server photography is preferred; a
+   * POS-created product keeps its local image because it is not uploaded.
    */
   imageUrl: string | null;
   /** When this row was last pulled from Supabase. */
   updatedAt: string;
-  /** Colourways chosen when the product was added locally (names, e.g. "Black"). */
+  /** Colourway names, from the storefront or chosen on this till. */
   colors: string[];
   /** Whether the product may be published to the storefront. Defaults false. */
   isWebsitePublished: boolean;

@@ -243,10 +243,14 @@ which is the wrong amount of ceremony for a customer standing at the counter.
 Push before pull, always — the money already taken matters more than the
 catalogue being a minute fresher.
 
-1. `syncSales` — each queued sale through `pos_record_sale`
-2. `syncReceiptEmails` — queued receipts, via the till's own endpoint
-3. `fetchProducts` — the catalogue
-4. `fetchPosUsers` — the roster, so the next offline sign-in works
+1. `syncSales` — each queued sale through `pos_record_sale`; a sale whose
+   product create is still queued is deferred, not failed
+2. `syncReturns` — queued returns through `pos_record_return`
+3. `syncProducts` — queued products through `pos_create_product`, then retry
+   the deferred sales
+4. `fetchProducts` — the catalogue
+5. `fetchPosUsers` — the roster, so the next offline sign-in works
+6. `syncReceiptEmails` — queued receipts, via the till's own endpoint
 
 Each step is isolated: a catalogue fetch that times out must not stop the day's
 sales from being pushed. Failures land on the queue entry, the loop continues,

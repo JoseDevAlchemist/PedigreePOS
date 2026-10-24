@@ -1,6 +1,6 @@
 "use client";
 
-import { Users, Wallet } from "lucide-react";
+import { PackagePlus, Users, Wallet } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 
@@ -15,11 +15,12 @@ import { cn } from "@/lib/cn";
 export function ManagerNav({
   current,
 }: {
-  current: "overview" | "staff";
+  current: "overview" | "staff" | "inventory";
 }) {
   const tabs = [
     { href: "/manager", label: "Overview", key: "overview" as const, icon: Wallet },
     { href: "/manager/staff", label: "Staff", key: "staff" as const, icon: Users },
+    { href: "/manager/inventory", label: "Inventory", key: "inventory" as const, icon: PackagePlus },
   ];
 
   return (

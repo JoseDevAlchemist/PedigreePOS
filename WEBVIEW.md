@@ -263,10 +263,14 @@ For each `sync_queue` row with `entity = "sale"`:
 1. Read the sale from `pos_sales` by `entityId`.
 2. If the sale is missing or already has `syncedAt !== null`, delete the queue
    row as stale.
-3. Call `pushSale(supabase, sale)`.
-4. On success: `pos_sales.update(clientUuid, { syncedAt: nowIso() })`, then
+3. If any line references a product whose `pos_create_product` call is still
+   queued, add the sale to `deferred` and leave its queue row untouched.
+   `runSync` retries deferred sales after `syncProducts`, so the product foreign
+   key exists by then.
+4. Call `pushSale(supabase, sale)`.
+5. On success: `pos_sales.update(clientUuid, { syncedAt: nowIso() })`, then
    delete the queue row.
-5. On failure: `recordFailure` → `status="error"`, `attempts+1`, `lastError`,
+6. On failure: `recordFailure` → `status="error"`, `attempts+1`, `lastError`,
    `updatedAt`.
 
 `pushSale` calls the RPC `pos_record_sale` with one argument per column and a
@@ -2327,7 +2331,7 @@ money/stock bugs before any new feature adds more state.
 **Status:** items 1–5 are implemented in `019_pos_product_creation.sql`,
 `lib/supabase/types.ts` and `supabase/tests/phase1_server_boundaries.sql`.
 Run the boundary checks with `pnpm test:rls` (local Supabase must be running).
-`pushProduct` still uses the old direct upsert until Phase 2.
+Phase 2 replaced the old direct upsert with `pos_create_product`.
 
 ### Phase 2 — Feature C complete
 
@@ -2336,6 +2340,18 @@ Run the boundary checks with `pnpm test:rls` (local Supabase must be running).
 3. Add category, stock, barcode, and positive-price validation to the form.
 4. Resize images; remove the data URL from the queue payload.
 5. Decide the colours/media story (local-only vs. persisted).
+
+**Status:** items 1–4 are implemented. `pushProduct` calls
+`pos_create_product`; `fetchProducts` keeps products with a queued create and
+merges local image/colour fields; the form captures category, opening stock,
+optional barcode and a positive price, and resizes images to 1200px before
+storing one data URL. `syncProducts` snapshots the local stock and queued
+sale/return deltas in one transaction, so a sale made before the create call
+lands is not counted twice; sales for a still-pending product are deferred and
+retried after the product push in the same sync. Item 5 decision: POS-entered
+images and colourways stay **till-only** until the colour/media persistence work
+(P2) lands; the pull still reads storefront colourways when they exist, and the
+UI says the local ones are not published rather than implying they are.
 
 ### Phase 3 — Feature B complete
 
