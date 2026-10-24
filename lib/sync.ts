@@ -29,11 +29,12 @@ import type { Database, Json } from "@/lib/supabase/types";
  * been taken matters more than the catalogue being a minute fresher.
  *
  *   1. `syncSales`          — sales and their stock decrements.
- *   2. `syncReturns`        — returns, refunds and their stock corrections.
- *   3. `syncProducts`       — products created on the till.
- *   4. `fetchProducts`      — the catalogue.
- *   5. `fetchPosUsers`      — the staff roster, so the next offline sign-in works.
- *   6. `syncReceiptEmails`  — queued receipts.
+ *   2. `syncProducts`       — products created on the till.
+ *   3. deferred sales       — retried now that their products exist.
+ *   4. `syncReturns`        — returns, refunds and their stock corrections.
+ *   5. `fetchProducts`      — the catalogue.
+ *   6. `fetchPosUsers`      — the staff roster, so the next offline sign-in works.
+ *   7. `syncReceiptEmails`  — queued receipts.
  *
  * ## Idempotency
  *
@@ -988,17 +989,9 @@ export async function runSync(): Promise<SyncSummary> {
       errors.push(messageOf(error));
     }
 
-    // Stock corrections: returns and newly added products go up before the
-    // catalogue is refreshed, so a pull never overwrites a local change.
-    try {
-      const result = await syncReturns();
-      if (result.failed > 0) {
-        notices.push(`${result.failed} return(s) could not be sent.`);
-      }
-    } catch (error) {
-      notices.push(messageOf(error));
-    }
-
+    // Products first: a return can reference a product that was created
+    // offline. If the product is not on the server yet, the return line is
+    // recorded with `product_id = NULL` and the server cannot restock it.
     try {
       const result = await syncProducts();
       productSyncFinished = true;
@@ -1011,7 +1004,9 @@ export async function runSync(): Promise<SyncSummary> {
 
     // The products those deferred sales needed now exist (or the push failed,
     // in which case this attempt is a real failure). Retry only the deferred
-    // sales so unrelated failures are not counted twice in one pass.
+    // sales so unrelated failures are not counted twice in one pass. This runs
+    // before returns so a return can resolve its original sale as well as its
+    // product, which keeps the server-side over-return check meaningful.
     if (productSyncFinished && deferredSaleIds.length > 0) {
       try {
         const result = await syncSales({
@@ -1025,6 +1020,17 @@ export async function runSync(): Promise<SyncSummary> {
       } catch (error) {
         errors.push(messageOf(error));
       }
+    }
+
+    // Stock corrections go up before the catalogue is refreshed, so a pull
+    // never overwrites a local change.
+    try {
+      const result = await syncReturns();
+      if (result.failed > 0) {
+        notices.push(`${result.failed} return(s) could not be sent.`);
+      }
+    } catch (error) {
+      notices.push(messageOf(error));
     }
 
     try {

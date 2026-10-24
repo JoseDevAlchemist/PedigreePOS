@@ -232,18 +232,22 @@ runSync()
 ├─ if (!isSupabaseConfigured()) ──► notice "offline only", skip to receipts
 │
 ├─ 1. syncSales()          → pos_record_sale per queued sale
-├─ 2. syncReturns()        → pos_record_return per queued return
-├─ 3. syncProducts()       → pos_create_product per queued product
-├─ 4. fetchProducts()      → catalogue pull (active products)
-├─ 5. fetchPosUsers()      → staff roster pull (active users)
+├─ 2. syncProducts()       → pos_create_product per queued product
+├─ 3. syncSales(deferred)  → retry sales whose product was just created
+├─ 4. syncReturns()        → pos_record_return per queued return
+├─ 5. fetchProducts()      → catalogue pull (active products)
+├─ 6. fetchPosUsers()      → staff roster pull (active users)
 │
-├─ 6. syncReceiptEmails()  → POST /api/pos/receipt-email per queued email
+├─ 7. syncReceiptEmails()  → POST /api/pos/receipt-email per queued email
 │
 └─ countPending(); setState({ syncing:false, pending, lastSyncedAt, … })
 ```
 
 The important invariant is that money and stock corrections are pushed before
 the catalogue pull, so a refresh can never erase an unsynced sale or return.
+Products and their deferred sales go before returns so a return can resolve
+both its product and the sale it came from, rather than landing with
+`product_id = NULL` and no server-side restock.
 
 Each step is wrapped in its own `try/catch`. A failed catalogue pull cannot stop
 a sale from pushing. Errors are collected into two buckets:

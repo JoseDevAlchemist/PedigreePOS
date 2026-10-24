@@ -265,10 +265,10 @@ catalogue being a minute fresher.
 
 1. `syncSales` — each queued sale through `pos_record_sale`; a sale whose
    product create is still queued is deferred, not failed
-2. `syncReturns` — queued returns through `pos_record_return`, then stamp the
-   ledger row and delete the queue entry
-3. `syncProducts` — queued products through `pos_create_product`, then retry
+2. `syncProducts` — queued products through `pos_create_product`, then retry
    the deferred sales
+3. `syncReturns` — queued returns through `pos_record_return`, then stamp the
+   ledger row and delete the queue entry
 4. `fetchProducts` — the catalogue
 5. `fetchPosUsers` — the roster, so the next offline sign-in works
 6. `syncReceiptEmails` — queued receipts, via the till's own endpoint
