@@ -10,11 +10,14 @@ import type { PosRole } from "@/lib/auth";
  * the record of what the cashier is doing right now, and it never blocks on a
  * round trip.
  *
- * Five tables, keyed for the access patterns that matter:
+ * Six tables, keyed for the access patterns that matter:
  *
  *   products      — the catalogue, keyed by the Supabase uuid.
  *   pos_sales     — sales, keyed by `clientUuid`, which is also the idempotency
  *                   key the sync upserts on.
+ *   local_returns — the till's own return ledger (added in v3). It survives the
+ *                   queue row, so a return can be audited and repeat returns
+ *                   can be prevented without the server.
  *   pos_users     — the staff roster, *including* the bcrypt hash, so a PIN can
  *                   be checked with no network. See the note in
  *                   012_pos.sql — this is a deliberate, documented tradeoff.
@@ -22,11 +25,11 @@ import type { PosRole } from "@/lib/auth";
  *   till_sessions — cash-drawer shifts (added in v2): open float, close count
  *                   and the variance between them. Local-only.
  *
- * Sale lines are embedded in the sale rather than kept in their own table.
- * On the server they are normalised (`pos_sale_items`) because reporting wants
- * to query them; on the device nothing ever queries a line independently, and
- * embedding means a sale and its lines are written in one transaction that can
- * never half-fail.
+ * Sale lines and return lines are embedded in their parent row rather than kept
+ * in their own table. On the server they are normalised (`pos_sale_items`,
+ * `pos_return_items`) because reporting wants to query them; on the device
+ * nothing ever queries a line independently, and embedding means a sale or
+ * return and its lines are written in one transaction that can never half-fail.
  */
 
 export type PosPaymentMethod = "cash" | "mpesa" | "card";
@@ -109,6 +112,43 @@ export interface LocalSale {
   items: LocalSaleItem[];
 }
 
+export interface LocalReturnItem {
+  productId: string;
+  /** Denormalised: a return reprinted later must show the name as sold. */
+  productName: string;
+  quantity: number;
+}
+
+/**
+ * A manager-approved return.
+ *
+ * The queue row is transient; this row is the local audit trail. It is written
+ * in the same Dexie transaction as the stock increment and the queue entry, so
+ * a crash cannot leave returned goods on the shelf with no record of why.
+ *
+ * `syncedAt` is stamped only after `pos_record_return` accepts the return.
+ * Until then the ledger is also how `pendingStockByProduct()` knows the stock
+ * delta a catalogue pull must preserve.
+ */
+export interface LocalReturn {
+  /** Primary key, and the server's idempotency key (`pos_returns.client_uuid`). */
+  clientUuid: string;
+  originalSaleUuid: string | null;
+  cashierId: string | null;
+  cashierName: string;
+  managerId: string;
+  managerName: string;
+  items: LocalReturnItem[];
+  /** Whole shillings returned to the customer; zero for a stock-only return. */
+  refundKes: number;
+  refundMethod: PosPaymentMethod | null;
+  /** M-Pesa code or card slip reference, when the refund had one. */
+  refundReference: string | null;
+  createdAt: string;
+  /** Null until the sync lands. */
+  syncedAt: string | null;
+}
+
 export type SyncQueueEntity = "sale" | "receipt_email" | "return" | "product";
 export type SyncQueueStatus = "pending" | "error";
 
@@ -157,9 +197,77 @@ export interface SyncQueueEntry {
   updatedAt: string;
 }
 
+/**
+ * Rebuild a ledger row from an old queue entry.
+ *
+ * v3 introduced `local_returns`, replacing the queue payload as the only copy
+ * of a return. Existing tills may have pending returns when they upgrade, so
+ * the version upgrade and the sync path both use this to adopt them without
+ * losing the stock delta or the audit trail.
+ */
+export function localReturnFromQueueEntry(
+  entry: SyncQueueEntry,
+): LocalReturn | null {
+  const payload = (entry.payload ?? {}) as Record<string, unknown>;
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  const items: LocalReturnItem[] = [];
+
+  for (const raw of rawItems) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const item = raw as Record<string, unknown>;
+    const productId = asNonEmptyString(item.product_id);
+    const productName = asNonEmptyString(item.product_name);
+    const quantity = asPositiveInteger(item.quantity);
+    if (productId === null || productName === null || quantity === null) {
+      continue;
+    }
+    items.push({ productId, productName, quantity });
+  }
+
+  if (items.length === 0) return null;
+
+  const method =
+    payload.refund_method === "cash" ||
+    payload.refund_method === "mpesa" ||
+    payload.refund_method === "card"
+      ? payload.refund_method
+      : null;
+
+  return {
+    clientUuid: entry.entityId,
+    originalSaleUuid: asNonEmptyString(payload.original_sale_id),
+    cashierId: asNonEmptyString(payload.cashier_id),
+    cashierName: asNonEmptyString(payload.cashier_name) ?? "",
+    managerId: asNonEmptyString(payload.manager_id) ?? "",
+    managerName: asNonEmptyString(payload.manager_name) ?? "",
+    items,
+    refundKes: asNonNegativeInteger(payload.refund_kes) ?? 0,
+    refundMethod: method,
+    refundReference: asNonEmptyString(payload.refund_reference),
+    createdAt: entry.createdAt,
+    syncedAt: null,
+  };
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asPositiveInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const integer = Math.floor(value);
+  return integer > 0 ? integer : null;
+}
+
+function asNonNegativeInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.floor(value));
+}
+
 class PosDatabase extends Dexie {
   products!: EntityTable<LocalProduct, "id">;
   pos_sales!: EntityTable<LocalSale, "clientUuid">;
+  local_returns!: EntityTable<LocalReturn, "clientUuid">;
   pos_users!: EntityTable<LocalPosUser, "id">;
   sync_queue!: EntityTable<SyncQueueEntry, "id">;
   till_sessions!: EntityTable<LocalTillSession, "id">;
@@ -184,6 +292,27 @@ class PosDatabase extends Dexie {
     this.version(2).stores({
       till_sessions: "++id, openedAt, closedAt",
     });
+
+    // v3 adds the returns ledger. A pending return created before this version
+    // exists only as a queue payload; adopt it into the ledger during the
+    // upgrade so the stock delta and the audit trail survive.
+    this.version(3)
+      .stores({
+        local_returns: "clientUuid, originalSaleUuid, createdAt, syncedAt",
+      })
+      .upgrade(async (tx) => {
+        const queued = await tx
+          .table<SyncQueueEntry, number>("sync_queue")
+          .where("entity")
+          .equals("return")
+          .toArray();
+        const ledger = tx.table<LocalReturn, string>("local_returns");
+
+        for (const entry of queued) {
+          const localReturn = localReturnFromQueueEntry(entry);
+          if (localReturn !== null) await ledger.put(localReturn);
+        }
+      });
   }
 }
 

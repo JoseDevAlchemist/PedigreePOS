@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isPosRole, type PosRole } from "@/lib/auth";
 import {
   getDb,
+  localReturnFromQueueEntry,
   nowIso,
   type LocalProduct,
   type LocalSale,
@@ -28,9 +29,11 @@ import type { Database, Json } from "@/lib/supabase/types";
  * been taken matters more than the catalogue being a minute fresher.
  *
  *   1. `syncSales`          — sales and their stock decrements.
- *   2. `syncReceiptEmails`  — queued receipts.
- *   3. `fetchProducts`      — the catalogue.
- *   4. `fetchPosUsers`      — the staff roster, so the next offline sign-in works.
+ *   2. `syncReturns`        — returns, refunds and their stock corrections.
+ *   3. `syncProducts`       — products created on the till.
+ *   4. `fetchProducts`      — the catalogue.
+ *   5. `fetchPosUsers`      — the staff roster, so the next offline sign-in works.
+ *   6. `syncReceiptEmails`  — queued receipts.
  *
  * ## Idempotency
  *
@@ -271,28 +274,31 @@ function normalizeImageUrl(raw: string | null): string | null {
 }
 
 /**
- * Units sold on this till that the server has not yet been told about, per
- * product.
+ * Units sold or returned on this till that the server has not yet been told
+ * about, per product.
  *
- * Derived from the queue rather than stored, so it cannot drift out of step
- * with the sales that produced it. Without it, `fetchProducts` would overwrite
- * locally-decremented stock with the server's higher figure and silently
- * un-sell goods the cashier has already handed over the counter.
+ * Derived from local rows rather than stored, so it cannot drift out of step
+ * with the sales and returns that produced it. Without it, `fetchProducts`
+ * would overwrite locally-decremented stock with the server's higher figure and
+ * silently un-sell goods the cashier has already handed over the counter.
+ *
+ * Returns come from the local ledger. A queue row from before v3 (or one whose
+ * ledger backfill was interrupted) is still counted, so an upgrade cannot make
+ * a returned unit disappear on the next catalogue pull.
  */
 async function pendingStockByProduct(): Promise<Map<string, number>> {
   const db = getDb();
-  const unsynced = await db.pos_sales.filter((sale) => sale.syncedAt === null).toArray();
-  // Returns that have not reached the server yet put stock back on the shelf,
-  // so they offset the pending sale decrements. Without this, a catalogue pull
-  // would reset a locally-returned product's stock back down until the return
-  // itself syncs.
-  const unsyncedReturns = await db.sync_queue
-    .where("entity")
-    .equals("return")
+  const unsyncedSales = await db.pos_sales
+    .filter((sale) => sale.syncedAt === null)
     .toArray();
+  const allReturns = await db.local_returns.toArray();
+  const ledgerIds = new Set(allReturns.map((record) => record.clientUuid));
+  const orphanReturns = (
+    await db.sync_queue.where("entity").equals("return").toArray()
+  ).filter((entry) => !ledgerIds.has(entry.entityId));
 
   const byProduct = new Map<string, number>();
-  for (const sale of unsynced) {
+  for (const sale of unsyncedSales) {
     for (const item of sale.items) {
       if (item.productId === null) continue;
       byProduct.set(
@@ -301,18 +307,30 @@ async function pendingStockByProduct(): Promise<Map<string, number>> {
       );
     }
   }
-  for (const entry of unsyncedReturns) {
-    const items = (entry.payload?.items as
-      | { product_id: string; quantity: number }[]
-      | undefined) ?? [];
-    for (const item of items) {
-      if (!item.product_id) continue;
+
+  // Returns that have not reached the server yet put stock back on the shelf,
+  // so they offset the pending sale decrements. A synced return is already in
+  // the server's stock figure and must not be subtracted twice.
+  for (const record of allReturns) {
+    if (record.syncedAt !== null) continue;
+    for (const item of record.items) {
       byProduct.set(
-        item.product_id,
-        (byProduct.get(item.product_id) ?? 0) - item.quantity,
+        item.productId,
+        (byProduct.get(item.productId) ?? 0) - item.quantity,
       );
     }
   }
+  for (const entry of orphanReturns) {
+    const record = localReturnFromQueueEntry(entry);
+    if (record === null) continue;
+    for (const item of record.items) {
+      byProduct.set(
+        item.productId,
+        (byProduct.get(item.productId) ?? 0) - item.quantity,
+      );
+    }
+  }
+
   return byProduct;
 }
 
@@ -349,6 +367,7 @@ export async function fetchProducts(): Promise<number> {
     "rw",
     db.products,
     db.pos_sales,
+    db.local_returns,
     db.sync_queue,
     async () => {
       // An empty response is far more likely to be an RLS/configuration failure
@@ -603,6 +622,7 @@ export async function syncProducts(): Promise<{
     "r",
     db.products,
     db.pos_sales,
+    db.local_returns,
     db.sync_queue,
     async () => {
       const entries = await db.sync_queue
@@ -661,17 +681,47 @@ async function pushReturn(
   const payload = (entry.payload ?? {}) as Record<string, unknown>;
   const { error } = await supabase.rpc("pos_record_return", {
     p_client_uuid: entry.entityId,
-    p_original_sale_id: (payload.original_sale_id as string) ?? null,
-    p_cashier_id: (payload.cashier_id as string) ?? null,
-    p_cashier_name: (payload.cashier_name as string) ?? "",
-    p_manager_id: (payload.manager_id as string) ?? null,
-    p_manager_name: (payload.manager_name as string) ?? "",
-    p_items: (payload.items ?? []) as unknown as Json,
+    p_original_sale_id: asUuidOrNull(payload.original_sale_id),
+    p_cashier_id: asUuidOrNull(payload.cashier_id),
+    p_cashier_name: asString(payload.cashier_name),
+    p_manager_id: asUuidOrNull(payload.manager_id),
+    p_manager_name: asString(payload.manager_name),
+    p_items: (Array.isArray(payload.items) ? payload.items : []) as unknown as Json,
+    p_refund_kes: asNonNegativeInteger(payload.refund_kes),
+    p_refund_method: asRefundMethod(payload.refund_method),
+    p_refund_reference: asNullableText(payload.refund_reference),
   });
 
   if (error) {
     throw new SyncError(`Return ${entry.entityId}: ${error.message}`);
   }
+}
+
+/**
+ * Keep the ledger row after its queue entry is gone.
+ *
+ * The server has accepted the return, so `syncedAt` is stamped in the same
+ * transaction that deletes the queue row. If the ledger is somehow missing
+ * (an upgrade that raced an old tab, for example), rebuild it from the payload
+ * first so the audit trail is not thrown away with the queue row.
+ */
+async function markReturnSynced(entry: SyncQueueEntry): Promise<void> {
+  const db = getDb();
+  const syncedAt = nowIso();
+
+  await db.transaction("rw", db.local_returns, db.sync_queue, async () => {
+    const existing = await db.local_returns.get(entry.entityId);
+    if (existing === undefined) {
+      const rebuilt = localReturnFromQueueEntry(entry);
+      if (rebuilt !== null) {
+        await db.local_returns.put({ ...rebuilt, syncedAt });
+      }
+    } else {
+      await db.local_returns.update(entry.entityId, { syncedAt });
+    }
+
+    if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
+  });
 }
 
 /**
@@ -691,7 +741,7 @@ export async function syncReturns(): Promise<{
   for (const entry of entries) {
     try {
       await pushReturn(supabase, entry);
-      if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
+      await markReturnSynced(entry);
       synced += 1;
     } catch (error) {
       await recordFailure(entry, error);
@@ -700,6 +750,34 @@ export async function syncReturns(): Promise<{
   }
 
   return { synced, failed };
+}
+
+/** A blank or non-string id must become NULL, never the string "". */
+function asUuidOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function asNullableText(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function asNonNegativeInteger(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(value));
+}
+
+function asRefundMethod(
+  value: unknown,
+): "cash" | "mpesa" | "card" | null {
+  return value === "cash" || value === "mpesa" || value === "card"
+    ? value
+    : null;
 }
 
 async function recordFailure(

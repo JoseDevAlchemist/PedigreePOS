@@ -77,6 +77,7 @@ supabase/
                       017      returns, return lines, and website publishing flag
                       018      rotate the demo manager PIN away from 9999
                       019      safe product creation, FK-safe returns, anon boundaries
+                      020      return refunds and server-side over-return protection
   pos_seed.sql        demo staff (optional, not a migration)
   tests/              pgTAP RLS checks for the anon boundaries
   config.toml         CLI config for this project
@@ -89,7 +90,7 @@ storefront, re-mirror, and let this repo stay a follower.
 
 ```bash
 npx supabase link --project-ref <ref>   # once
-npx supabase db push                    # applies 012–019
+npx supabase db push                    # applies 012–020
 npx supabase db push --include-seed     # also inserts the demo staff
 ```
 
@@ -106,13 +107,13 @@ it can reach, and nothing else does:
 | `INSERT pos_users`          | enrolling a cashier — `role = 'cashier'` only (016)    |
 | `CALL pos_record_sale(...)` | record one sale, its lines and its stock decrement     |
 | `CALL pos_create_product(...)` | insert one till-created product, validated by the RPC |
-| `CALL pos_record_return(...)` | record a return, its lines and the stock correction   |
+| `CALL pos_record_return(...)` | record a return, its lines, refund and stock correction |
 | `CALL pos_daily_totals()`   | aggregate takings, for the manager view                |
 
 It **cannot read a sale back**, and it cannot write `products`,
 `pos_returns` or `pos_return_items` directly. See
-`supabase/migrations/012_pos.sql`, `014_pos_record_sale.sql` and
-`019_pos_product_creation.sql`.
+`supabase/migrations/012_pos.sql`, `014_pos_record_sale.sql`,
+`019_pos_product_creation.sql` and `020_pos_returns_ledger.sql`.
 
 ### Why recording a sale is a function, not an upsert
 
@@ -154,6 +155,7 @@ timeout is always safe.
 | `products`     | the catalogue and its first photograph, written by `fetchProducts` |
 | `pos_users`    | active staff and their PIN hashes, for offline sign-in      |
 | `pos_sales`    | every sale this device has taken, synced or not            |
+| `local_returns`| the device's return ledger, including refunds and sync state |
 | `sync_queue`   | what is still owed to the server                           |
 | `till_sessions`| cash-drawer shifts: float, close count and variance        |
 
@@ -182,10 +184,27 @@ box and Enter resolves it there instead; neither path double-adds.
 
 Stock is the interesting part. The local count is decremented immediately. When
 the catalogue is refreshed, the server's figure is written as
-`server − unsynced_units_on_this_till`, derived from the queue rather than
-stored, so it cannot drift out of step with the sales that produced it.
-Otherwise a refresh would quietly un-sell goods the cashier has already handed
-over the counter.
+`server − unsynced sales + unsynced returns` for this till, derived from the
+local sales and the returns ledger rather than stored, so it cannot drift out of
+step with the transactions that produced it. Otherwise a refresh would quietly
+un-sell goods the cashier has already handed over the counter, or erase a
+returned unit before its push lands.
+
+### Returns and refunds
+
+A return needs a manager PIN before the dialog opens. The chosen quantity is
+limited to what the original sale still has outstanding, which the till works
+out from its own return ledger. The ledger row, the stock increment and the
+queue entry are written in one Dexie transaction; the queue row is deleted when
+`pos_record_return` accepts the push, and the ledger row stays with `syncedAt`
+set.
+
+The manager can record a refund in cash, M-Pesa or card. A sale return defaults
+to the price paid, less any basket discount; a barcode return without a receipt
+starts at zero for a stock-only return. Cash refunds are subtracted from the
+drawer's expected cash. The server stores the amount, method and optional
+reference, and rejects a return for more units than the sale still has
+outstanding.
 
 ### The manager's pages
 
@@ -202,7 +221,8 @@ not seen yet, marked as such.
 - **Recent transactions.** The last ten sales, with cashier, payment method and
   sync status.
 - **Cash drawer.** Open a shift with its float; close it against a physical
-  count. The difference between what should be in the drawer and what is —
+  count. Expected cash is the float plus cash sales, less cash refunds. The
+  difference between what should be in the drawer and what is —
   `counted − expected` — is stamped at close and kept.
 - **Staff.** Enrol a cashier with a name and a PIN. The PIN is bcrypt-hashed in
   the browser with the same settings sign-in checks against, and only the hash is
@@ -245,7 +265,8 @@ catalogue being a minute fresher.
 
 1. `syncSales` — each queued sale through `pos_record_sale`; a sale whose
    product create is still queued is deferred, not failed
-2. `syncReturns` — queued returns through `pos_record_return`
+2. `syncReturns` — queued returns through `pos_record_return`, then stamp the
+   ledger row and delete the queue entry
 3. `syncProducts` — queued products through `pos_create_product`, then retry
    the deferred sales
 4. `fetchProducts` — the catalogue
@@ -294,8 +315,9 @@ Stated plainly, because each one is a decision rather than an oversight.
    the caller is a manager. A cashier who edits `localStorage` can reach the
    staff screen. Same boundary as point 2, and the same fix: device tokens.
 5. **Till sessions are local-only.** `till_sessions` records the float, the
-   count and the variance on the device. Reconciling drawers across tills is a
-   Phase 3 job; today a manager reads them on the till they were opened on.
+   count and the variance on the device, and cash refunds are subtracted
+   locally. Reconciling drawers across tills is still a later job; today a
+   manager reads them on the till they were opened on.
 
 ---
 
@@ -334,6 +356,9 @@ pnpm build         # must be --webpack; confirm public/sw.js was written
    down by the quantity sold.
 10. Press **Print receipt** and check the preview: it is a narrow 80mm receipt,
     with the app hidden behind it.
+11. As the manager, open **Return / Refund**, pick a sale, return one of two
+    units and enter a refund. The dialog shows the remaining unit next time,
+    and the returned stock survives a catalogue refresh before the push.
 
 ### The device path
 
@@ -369,6 +394,10 @@ the live project, as `anon`, replaying exactly what `lib/sync.ts` sends:
 - a sale with no lines is refused
 - direct `INSERT` into `pos_sales` is now denied, and `pos_apply_sale_stock` is
   no longer callable by `anon`
+- direct `INSERT` into `pos_returns` / `pos_return_items` is denied; the RPC is
+  the boundary
+- a return records its refund amount, method and reference, a replay returns
+  `false`, and a return beyond the sale's remaining units is refused
 - `pos_sales` still cannot be read back; the roster still can
 - the documented demo PINs verify against the stored bcrypt hashes
 

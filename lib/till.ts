@@ -60,21 +60,34 @@ export async function openTill(input: {
 }
 
 /**
- * What should be in the drawer: the float plus every cash sale since opening.
+ * What should be in the drawer: the float plus every cash sale since opening,
+ * less every cash refund paid out of it.
  *
  * Cash only, on purpose — an M-Pesa payment never enters the drawer, and
  * counting it here is how a close comes up mysteriously "over" by the day's
- * mobile money.
+ * mobile money. A cash refund leaves the drawer, so ignoring it would make the
+ * close look short by exactly the money the manager handed back.
  */
 export async function getExpectedCash(till: LocalTillSession): Promise<number> {
   const upper = till.closedAt ?? nowIso();
-  const cashSales = await getDb()
-    .pos_sales.where("createdAt")
+  const db = getDb();
+  const cashSales = await db.pos_sales
+    .where("createdAt")
     .between(till.openedAt, upper, true, true)
     .and((sale) => sale.paymentMethod === "cash")
     .toArray();
+  const cashRefunds = await db.local_returns
+    .where("createdAt")
+    .between(till.openedAt, upper, true, true)
+    .and((record) => record.refundMethod === "cash" && record.refundKes > 0)
+    .toArray();
 
-  return cashSales.reduce((sum, sale) => sum + sale.totalKes, till.openingFloat);
+  const cashTaken = cashSales.reduce((sum, sale) => sum + sale.totalKes, 0);
+  const cashReturned = cashRefunds.reduce(
+    (sum, record) => sum + record.refundKes,
+    0,
+  );
+  return till.openingFloat + cashTaken - cashReturned;
 }
 
 /**

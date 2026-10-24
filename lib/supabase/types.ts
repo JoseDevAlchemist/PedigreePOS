@@ -231,6 +231,9 @@ export type Database = {
           p_manager_id: string | null;
           p_manager_name: string;
           p_items: Json;
+          p_refund_kes: number;
+          p_refund_method: string | null;
+          p_refund_reference: string | null;
         };
         Returns: boolean;
       };

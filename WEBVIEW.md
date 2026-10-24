@@ -1,10 +1,10 @@
 # WEBVIEW.md — Pedigree POS Architectural Blueprint
 
 > **Status:** definitive architecture guide and implementation roadmap.
-> **Baseline:** `main` at `49e671a`, plus the uncommitted returns/inventory work
-> currently in the working tree (`lib/returns.ts`, `return-dialog.tsx`,
-> `return-pin-dialog.tsx`, `product-form.tsx`, `app/manager/inventory/`, and
-> `supabase/migrations/017_pos_returns.sql`).
+> **Baseline:** `main` at `49e671a`, with Phases 0–3 implemented on the local
+> stacked branches `phase-0-money-safety`, `phase-1-server-boundaries`,
+> `phase-2-feature-c` and `phase-3-returns-ledger`. Remote rollout is still
+> pending; the local Supabase project has migrations through `020`.
 > **Audience:** any engineer adding a feature to this till.
 > **Rule:** this document describes the system as it is. Where code and comments
 > disagree, the code wins, and the drift is called out explicitly.
@@ -49,6 +49,7 @@ trust.
 │  Dexie / IndexedDB "pedigree-pos"                                  │
 │   ├─ products        catalogue + local stock                        │
 │   ├─ pos_sales       sales with embedded lines                      │
+│   ├─ local_returns   return ledger with embedded refund/lines       │
 │   ├─ pos_users       staff roster + bcrypt hashes                   │
 │   ├─ sync_queue      outbox owed to Supabase                        │
 │   └─ till_sessions   cash-drawer shifts (local only)                │
@@ -231,7 +232,7 @@ runSync()
 │
 ├─ 1. syncSales()          → pos_record_sale per queued sale
 ├─ 2. syncReturns()        → pos_record_return per queued return
-├─ 3. syncProducts()       → products.upsert per queued product
+├─ 3. syncProducts()       → pos_create_product per queued product
 ├─ 4. fetchProducts()      → catalogue pull (active products)
 ├─ 5. fetchPosUsers()      → staff roster pull (active users)
 │
@@ -240,11 +241,8 @@ runSync()
 └─ countPending(); setState({ syncing:false, pending, lastSyncedAt, … })
 ```
 
-> **Documentation drift:** the header comment in `lib/sync.ts` says
-> "sales → receipts → products → users". The code is
-> **sales → returns → products → catalogue → roster → receipts**. The code is
-> correct; the comment should be updated in the next sync change. The important
-> invariant — money and stock corrections before the catalogue pull — holds.
+The important invariant is that money and stock corrections are pushed before
+the catalogue pull, so a refresh can never erase an unsynced sale or return.
 
 Each step is wrapped in its own `try/catch`. A failed catalogue pull cannot stop
 a sale from pushing. Errors are collected into two buckets:
@@ -287,27 +285,32 @@ and `false` ("already there") both mean the server has the sale.
 For each `sync_queue` row with `entity = "return"`:
 
 1. Call `pushReturn(supabase, entry)`.
-2. On success: delete the queue row. There is **no local return row** to stamp;
-   the queue row was the only local record.
-3. On failure: `recordFailure`.
+2. On success: in one Dexie transaction, stamp `local_returns.syncedAt` and
+   delete the queue row. If the ledger row is somehow missing, rebuild it from
+   the payload first so the audit trail is not lost.
+3. On failure: `recordFailure`; the ledger row stays with `syncedAt = null`, so
+   the stock delta survives the next catalogue pull and the push is retried.
 
 `pushReturn` maps the snake_case payload written by `lib/returns.ts` onto
 `pos_record_return`:
 
 ```ts
 p_client_uuid       ← entry.entityId
-p_original_sale_id  ← payload.original_sale_id
+p_original_sale_id  ← payload.original_sale_id   // blank becomes NULL
 p_cashier_id        ← payload.cashier_id
 p_cashier_name      ← payload.cashier_name
 p_manager_id        ← payload.manager_id
 p_manager_name      ← payload.manager_name
 p_items             ← payload.items  // [{ product_id, product_name, quantity }]
+p_refund_kes        ← payload.refund_kes
+p_refund_method     ← payload.refund_method
+p_refund_reference  ← payload.refund_reference
 ```
 
-The RPC inserts `pos_returns` with `ON CONFLICT (client_uuid) DO NOTHING`. If
-the return already existed, it returns `false` and does **not** touch stock.
-Otherwise it inserts `pos_return_items` and increments
-`products.stock_quantity` for each product.
+The RPC returns `false` for a replay before touching stock. A new return inserts
+its refund fields and lines, rejects a quantity beyond the sale's remaining
+units for products still identifiable on the sale, aggregates duplicate lines
+when restocking, and treats unknown optional ids as `NULL`.
 
 #### `syncProducts()`
 
@@ -393,8 +396,9 @@ touched.
 
 > **Transaction caveat:** both `lib/returns.ts` and
 > `components/manager/product-form.tsx` call `addSyncQueueEntry()` **inside** a
-> Dexie transaction. That works because every awaited operation inside it is
-> another Dexie request on `sync_queue`, but `countPending()` also synchronously
+> Dexie transaction. That works because every awaited operation inside it is a
+> Dexie request on a table named in the transaction scope (`products`,
+> `local_returns`, `sync_queue`), but `countPending()` also synchronously
 > notifies React listeners. Keep this helper’s post-commit side effects small;
 > do not add a `fetch`, `await new Promise`, or a React state update that
 > triggers asynchronous work inside the transaction. Dexie auto-commits when
@@ -472,8 +476,15 @@ sync_queue:   "++id, entity, entityId, status, createdAt"
 till_sessions: "++id, openedAt, closedAt"
 ```
 
-Dexie carries v1 tables forward untouched when only a new store is named. An
-existing till upgrades in place with no `.upgrade()` step and no lost sales.
+#### Version 3
+
+```ts
+local_returns: "clientUuid, originalSaleUuid, createdAt, syncedAt"
+```
+
+Dexie carries earlier tables forward untouched when only a new store is named.
+The v3 `.upgrade()` adopts any return that exists only as a v2 queue payload, so
+a till with a pending return upgrades in place without losing the stock delta.
 
 #### Table contracts
 
@@ -481,34 +492,29 @@ existing till upgrades in place with no `.upgrade()` step and no lost sales.
 | --- | --- | --- | --- |
 | `products` | `id` (Supabase uuid) | `name, slug, category, barcode, basePrice, discountPercent, stockQuantity, active, imageUrl, updatedAt, colors, isWebsitePublished` | `stockQuantity` is the till’s own count, already reduced by every sale and increased by every return, synced or not. |
 | `pos_sales` | `clientUuid` | `cashierId, cashierName, subtotalKes, discountKes, discountPercent, totalKes, paymentMethod, amountTendered, changeDue, paymentReference, createdAt, syncedAt, items[]` | Lines are embedded. `syncedAt` is null until the RPC acknowledges. |
+| `local_returns` | `clientUuid` | `originalSaleUuid, cashierId, cashierName, managerId, managerName, items[], refundKes, refundMethod, refundReference, createdAt, syncedAt` | The durable return ledger. Lines are embedded. `syncedAt` is null until the RPC acknowledges. |
 | `pos_users` | `id` | `name, pinHash, role, active, updatedAt` | Includes bcrypt hash so PIN checks work offline. Deliberate, documented tradeoff. |
 | `sync_queue` | `++id` (auto) | `entity, entityId, status, attempts, lastError, payload, createdAt, updatedAt` | Outbox. Success deletes the row. |
 | `till_sessions` | `++id` (auto) | `openedAt, openedBy, openingFloat, closedAt, closedBy, expectedCash, countedCash, variance` | Local only. No sync queue entry. |
 
-Sale lines are embedded because nothing queries a line independently on the
-device, and embedding makes the sale and its lines one atomic write. On the
-server they are normalised into `pos_sale_items` because reporting queries them.
+Sale and return lines are embedded because nothing queries a line independently
+on the device, and embedding makes the parent and its lines one atomic write. On
+the server they are normalised into `pos_sale_items` / `pos_return_items`
+because reporting queries them.
 
-#### Adding schema version 3
-
-If a new table is needed (for example a local returns ledger):
-
-```ts
-this.version(3).stores({
-  local_returns: "clientUuid, createdAt, syncedAt, originalSaleUuid",
-});
-```
+#### Adding a later schema version
 
 - Name **only the new store** if existing stores are unchanged.
 - If adding an index to an existing store, repeat that store’s full index string
   in the new version; Dexie deletes indexes not named.
 - Never change a primary key in place. Create a new table and migrate.
-- Test the upgrade with a database already populated by v2, not an empty one.
+- Test the upgrade with a database already populated by the previous version,
+  not an empty one.
 
 ### 3.2 Supabase — tables and migrations
 
 Migrations `001–011` are storefront-owned mirrors. Do not edit them here.
-`012–018` are owned by the POS.
+`012–020` are owned by the POS.
 
 | Migration | Purpose | POS-owned |
 | --- | --- | --- |
@@ -530,6 +536,7 @@ Migrations `001–011` are storefront-owned mirrors. Do not edit them here.
 | `017_pos_returns.sql` | `products.is_website_published`, `pos_returns`, `pos_return_items`, `pos_record_return` | **yes** |
 | `018_pos_rotate_demo_manager_pin.sql` | Rotates the seeded demo manager PIN away from `9999` | **yes** |
 | `019_pos_product_creation.sql` | `pos_create_product`; FK-safe returns; drops direct return writes | **yes** |
+| `020_pos_returns_ledger.sql` | Return refunds; over-return guard; new return RPC signature | **yes** |
 
 > The repository has no `005` migration. That is historical; do not renumber.
 
@@ -563,7 +570,9 @@ Migrations `001–011` are storefront-owned mirrors. Do not edit them here.
   `original_sale_id uuid` → `pos_sales(id)` on delete set null,
   `cashier_id`, `cashier_name`, `manager_id`, `manager_name`, `created_at`,
   `synced_at`.
-- No refund amount, refund method, or restock flag.
+- `refund_kes integer NOT NULL DEFAULT 0`, `refund_method`
+  (`cash|mpesa|card`, null when the refund is zero), `refund_reference`.
+- No restock flag: the line quantities are the restock, and a replay is a no-op.
 
 **`pos_return_items`**
 
@@ -577,9 +586,12 @@ one transaction. `RETURNS boolean` (`true` recorded, `false` replay).
 `pos_sales.stock_applied_at`, `GREATEST(0, stock - qty)`. No grant to `anon`
 after 014; called only by `pos_record_sale`.
 
-**`pos_record_return`** — SECURITY DEFINER. Inserts the return, its lines, and
-increments stock. `ON CONFLICT (client_uuid) DO NOTHING`; returns `false` on a
-replay and does not touch stock.
+**`pos_record_return`** — SECURITY DEFINER. Inserts the return, its refund and
+lines, and increments stock. A replay returns `false` before validation and
+never touches stock. For a known sale, the requested quantity is checked
+against the sold units less previous returns; products still identifiable on
+the sale cannot be over-returned. Duplicate lines are aggregated for the stock
+update, and unknown optional ids become `NULL`.
 
 #### Current anon capability surface
 
@@ -590,11 +602,12 @@ replay and does not touch stock.
 | SELECT | `pos_users` | All rows, including hashes (012 tradeoff) |
 | INSERT | `pos_users` | Only `cashier` + `active` (016) |
 | CALL | `pos_record_sale` | The only sale write path |
-| CALL | `pos_record_return` | The only intended return write path |
+| CALL | `pos_record_return` | The only return write path, including refunds and over-return guard |
+| CALL | `pos_create_product` | Insert-only product creation from the till |
 | CALL | `pos_daily_totals` | Aggregates only; unused by the UI |
-| **INSERT** | **`pos_returns`, `pos_return_items`** | **Still allowed by 017 policies; should be dropped** |
-| INSERT/UPDATE | `products` | **Not allowed** — blocks Feature C |
-| Upload | `storage.objects` (`product-images`) | Authenticated only — blocks POS image upload |
+| INSERT | `pos_returns`, `pos_return_items` | **Denied**; the return RPC is the boundary (019) |
+| INSERT/UPDATE | `products` | **Denied**; `pos_create_product` is the boundary |
+| Upload | `storage.objects` (`product-images`) | Authenticated only — POS images stay till-only for now |
 
 ### 3.3 `sync_queue` entities
 
@@ -602,8 +615,8 @@ replay and does not touch stock.
 | --- | --- | --- | --- | --- | --- |
 | `sale` | sale `clientUuid` | `null` | `completeSale()` | `syncSales()` / `pos_record_sale` | `client_uuid` |
 | `receipt_email` | sale `clientUuid` | `{ email }` | `queueReceiptEmail()` | `syncReceiptEmails()` / API route | none |
-| `return` | return UUID | `{ original_sale_id, cashier_id, cashier_name, manager_id, manager_name, items[] }` | `recordReturn()` | `syncReturns()` / `pos_record_return` | `client_uuid` |
-| `product` | product `id` | `{ name, slug, category, basePrice, colors, isWebsitePublished, imageUrl }` | `product-form.tsx` | `syncProducts()` / `pushProduct` | product `id` |
+| `return` | return UUID | `{ original_sale_id, cashier_id, cashier_name, manager_id, manager_name, items[], refund_kes, refund_method, refund_reference }` | `recordReturn()` | `syncReturns()` / `pos_record_return` | `client_uuid` |
+| `product` | product `id` | `{ name, slug, category, basePrice, colors, isWebsitePublished, imageUrl }` | `product-form.tsx` | `syncProducts()` / `pos_create_product` | product `id` |
 
 Status values are only `"pending"` and `"error"`. There is no `"processing"` or
 `"dead"` state. A successful push deletes the row. A failed push sets
@@ -615,7 +628,7 @@ Status values are only `"pending"` and `"error"`. There is no `"processing"` or
 | --- | --- | --- |
 | Local stock | `products.stockQuantity` in Dexie | What the till believes is on the shelf right now, including unsynced sales/returns |
 | Server stock | `products.stock_quantity` in Postgres | What the shared storefront and other devices see, including only synced changes |
-| Pending delta | `pendingStockByProduct()` | Units sold but not synced, minus units returned but not synced |
+| Pending delta | `pendingStockByProduct()` | Units sold but not synced, minus units returned but not synced (from `local_returns`, with old queue-only returns still counted) |
 
 The invariant is:
 
@@ -1350,7 +1363,7 @@ paint the idle/first item frame. This is cosmetic and must not block printing.
 
 ---
 
-## 6. Feature B — manager-approved returns (partial)
+## 6. Feature B — manager-approved returns (implemented)
 
 ### 6.1 What exists today
 
@@ -1361,58 +1374,79 @@ pos-screen.tsx
                                      ▼
                                   ReturnDialog
                                      │ select recent sale or scan barcode
-                                     │ choose item + quantity
+                                     │ remaining units from local_returns
+                                     │ quantity + refund amount/method
                                      ▼
                                   lib/returns.ts recordReturn()
                                      │ one Dexie transaction:
+                                     │   reject over-return (local ledger)
                                      │   products.stockQuantity += qty
+                                     │   local_returns.add({ … refund, syncedAt:null })
                                      │   sync_queue.add({ entity:"return", … })
                                      ▼
                                   lib/sync.ts syncReturns()
                                      │ pushReturn(entry)
                                      ▼
                                   Supabase pos_record_return()
-                                     │ insert pos_returns + pos_return_items
-                                     │ products.stock_quantity += qty
+                                     │ replay → false, no stock change
+                                     │ insert pos_returns + refund + return lines
+                                     │ reject over-return for known sale products
+                                     │ aggregate duplicate lines; stock += qty
                                      ▼
-                                  success → delete queue row
+                                  success → stamp ledger syncedAt + delete queue row
 ```
 
 Implemented:
 
 - Manager PIN gate (`return-pin-dialog.tsx`).
-- Recent-sale selection and barcode scan (`return-dialog.tsx`).
-- Local stock increment and queue entry (`lib/returns.ts`).
-- Sync push and server RPC (`lib/sync.ts`, `017_pos_returns.sql`).
-- `pendingStockByProduct()` offsets pending returns during a catalogue pull.
+- Recent-sale selection, barcode scan, and a remounting dialog that resets
+  cleanly (`return-dialog.tsx`).
+- The chosen quantity reaches `recordReturn` and is clamped to the sale's
+  remaining units.
+- A durable local ledger (`local_returns`, Dexie v3), written in the same
+  transaction as the stock increment and queue entry.
+- Repeat/over-return prevention from the ledger, plus a server check for
+  products still identifiable on the sale.
+- Refund amount, method and optional reference, including cash-drawer impact.
+- `pendingStockByProduct()` derives pending returns from the ledger, so an
+  error-status push or an old queue-only return still survives a catalogue pull.
+- Direct anon writes to `pos_returns` / `pos_return_items` are denied; the RPC
+  is the boundary.
 
-Not implemented / incomplete:
+Still not implemented:
 
-- The chosen return quantity is **ignored** (see below).
-- Returns are not recorded in a local ledger; once the queue row is deleted,
-  the till has no local return history.
-- No record of how many units of a sale line were already returned.
-- No refund amount or refund method is stored.
-- The return dialog does not reset after completion and does not refresh its
-  sale list.
-- `pendingStockByProduct()` ignores returns whose queue status is `"error"`.
-- The catalogue pull computes pending stock outside the write transaction, so a
-  concurrent return can be overwritten.
-- The manager PIN check is client-side only; the RPC is callable by anon.
-- `pos_returns` / `pos_return_items` still allow direct anon inserts (017), which
-  bypasses the RPC and its stock update.
+- The manager PIN check is client-side only; the RPC is callable by anon. The
+  server over-return guard limits the damage, but this still needs device tokens
+  or a server session.
+- Refunds are recorded, not executed: no M-Pesa/card provider call is made.
+- There is no manager-facing returns-history page; the optional Phase 3 item is
+  deferred.
+- Till sessions and drawer reconciliation remain local-only.
+
+> The defect table below is the pre-fix analysis from the original audit. It is
+> retained for context; B1–B13 are addressed by Phases 0–3 except for the
+> explicit limits above.
 
 ### 6.2 `lib/returns.ts` in detail
 
 `recordReturn(input)`:
 
-1. Generates `returnUuid = crypto.randomUUID()` and `now = nowIso()`.
-2. Opens a Dexie read/write transaction over `products` and `sync_queue`.
-3. For each returned item:
-   - Read the local product.
-   - If it is missing (delisted), **skip it** rather than failing the return.
-   - `stockQuantity = product.stockQuantity + item.quantity`.
-4. Call `addSyncQueueEntry()` with:
+1. Requires a non-blank manager id, at least one item, a positive whole-number
+   quantity per line, and a refund method when `refundKes > 0`. Items for the
+   same product are aggregated into one line.
+2. Generates `returnUuid = crypto.randomUUID()` and `now = nowIso()`.
+3. Opens a Dexie read/write transaction over `products`, `local_returns` and
+   `sync_queue`.
+4. When the return is against a sale, builds the sold quantities from the sale's
+   lines and the already-returned quantities from `local_returns`, then rejects
+   any line that exceeds the remaining units. The read and the write share the
+   transaction, so two tabs cannot both return the same last unit.
+5. For each returned item, reads the local product and increments its
+   `stockQuantity`. A delisted/missing product is skipped rather than failing
+   the whole return.
+6. Adds the durable `LocalReturn` ledger row, with embedded items, refund
+   fields, and `syncedAt: null`.
+7. Calls `addSyncQueueEntry()` with:
    ```ts
    {
      entity: "return",
@@ -1422,20 +1456,21 @@ Not implemented / incomplete:
        cashier_id, cashier_name,
        manager_id, manager_name,
        items: [{ product_id, product_name, quantity }],
+       refund_kes, refund_method, refund_reference,
      },
      createdAt: now,
      updatedAt: now,
    }
    ```
-5. Return the UUID.
+8. Returns the UUID.
 
-The transaction is the durability guarantee: the stock increment and the queue
-row either both commit or neither does. The cart is not involved. The network is
-not awaited.
+The transaction is the durability guarantee: the stock increment, the ledger row
+and the queue row either all commit or none do. The cart is not involved. The
+network is not awaited.
 
-`applyReturnLocally(items)` exists but is **unused**. It does a non-atomic
-read-then-update per item and has no idempotency marker. Either delete it or
-replace it with a ledger-based replay function; do not build on it.
+The old `applyReturnLocally()` replay helper has been removed. Replay is no
+longer a local stock operation; it is the ledger row's `syncedAt` stamp plus the
+server RPC's idempotency key.
 
 ### 6.3 `lib/sync.ts` push path
 
@@ -1443,56 +1478,57 @@ replace it with a ledger-based replay function; do not build on it.
 `pushReturn()`:
 
 - `p_client_uuid` ← `entry.entityId`
-- `p_original_sale_id` ← payload
+- `p_original_sale_id` ← payload, blank/non-string coerced to `NULL`
 - `p_cashier_id` / `p_cashier_name`
-- `p_manager_id` / `p_manager_name`
+- `p_manager_id` / `p_manager_name` (blank coerced to `NULL`)
 - `p_items` ← payload items
+- `p_refund_kes`, `p_refund_method`, `p_refund_reference`
 
-`pos_record_return`:
+`pos_record_return` (020):
 
-1. Inserts `pos_returns` `ON CONFLICT (client_uuid) DO NOTHING RETURNING id`.
-2. If no id was returned, the return already exists: return `false`, no stock
-   change.
-3. Insert each `pos_return_items` row.
-4. `UPDATE products p SET stock_quantity = p.stock_quantity + i.quantity FROM
-   (jsonb elements) i WHERE p.id = i.product_id`.
-5. Return `true`.
+1. Returns `false` immediately if `pos_returns.client_uuid` already exists.
+   There is no validation and no stock change on a replay.
+2. Validates the item array, quantities, refund amount and refund method.
+3. Resolves optional sale/cashier/manager ids against their tables; an unknown
+   id becomes `NULL`.
+4. Inserts `pos_returns` (including refund fields) with
+   `ON CONFLICT (client_uuid) DO NOTHING RETURNING id`. A concurrent duplicate
+   that loses this race also returns `false`.
+5. For a known sale, aggregates the requested quantities by product and rejects
+   any request beyond `sold − previously returned` for products still
+   identifiable on the sale. Hard-deleted products are skipped because their
+   `pos_sale_items.product_id` is already `NULL`; the local ledger is the
+   stronger check there.
+6. Inserts each `pos_return_items` row, resolving unknown products to `NULL`.
+7. Aggregates the inserted lines by product and increments
+   `products.stock_quantity`, so duplicate lines for one product add both
+   quantities.
+8. Returns `true`.
 
-**Foreign keys are strict, and the function does not guard them.** Three
-references can make a return fail even though the local transaction succeeded:
+On success `markReturnSynced()` runs in one Dexie transaction over
+`local_returns` and `sync_queue`: it stamps `local_returns.syncedAt` and deletes
+the queue row. If the ledger row is missing (for example an upgrade raced a tab
+running old code), it rebuilds the row from the queue payload before stamping,
+so the audit trail is not lost.
 
-- `original_sale_id` → `pos_sales(id)`. The client sends the sale’s
-  `clientUuid`, which is the server’s `id` only after 014. If that sale has not
-  synced (or its push failed), the insert raises `23503` and the return cannot
-  be recorded.
-- each `pos_return_items.product_id` → `products(id)`. A product that was
-  hard-deleted server-side, or created locally and never pushed (Feature C),
-  does not exist in `products`; the item insert fails before the stock `UPDATE`
-  runs. “The join silently skips it” is only true for the `UPDATE`, not for the
-  insert.
-- `cashier_id` / `manager_id` → `pos_users(id)`. A non-UUID placeholder fails
-  at argument binding; an unknown UUID fails at insert.
-
-The fix is twofold: resolve optional ids to `NULL` on the client when they are
-not valid UUIDs (see §6.6), and resolve sale/product references against the
-server inside the RPC instead of trusting them.
-
-On success the client deletes the queue row. There is no local `syncedAt`
-because there is no local return entity. This is the core design gap: the queue
-row is both the work item and the only local record.
+The manager PIN gate remains client-side. An anon caller can invoke the RPC
+directly; the server-side over-return check and idempotency key limit the damage,
+but closing that gap still needs device tokens or a server session.
 
 ### 6.4 How `pendingStockByProduct()` handles returns
 
-It is called by `fetchProducts()` before writing the catalogue. It builds a
-`Map<productId, pendingDelta>`:
+It is called inside the `fetchProducts()` write transaction (and the
+`syncProducts()` snapshot transaction). It builds a `Map<productId,
+pendingDelta>`:
 
 1. Read every `pos_sales` row with `syncedAt === null`.
 2. For each line with a `productId`, **add** its quantity. These are units the
    server still thinks are on the shelf.
-3. Read every `sync_queue` row with `entity = "return"` and
-   `status = "pending"`.
-4. For each returned item with a `product_id`, **subtract** its quantity,
-   **clamped at 0** by the current code (see the defect below).
+3. Read every `local_returns` row. For each row with `syncedAt === null`,
+   **subtract** its line quantities. The delta stays signed.
+4. Also adopt returns that exist only as a queue row (pre-v3 or an interrupted
+   upgrade), but only when the ledger has no row for that `clientUuid`. This
+   keeps the stock delta visible without counting a ledger row twice.
 5. Return the map.
 
 Then `fetchProducts()` writes:
@@ -1507,80 +1543,37 @@ Worked example:
 | --- | --- | --- | --- | --- |
 | Baseline | 10 | 10 | `{}` | 10 |
 | Sale 2 (unsynced) | 10 | 8 | `{ p: 2 }` | 8 |
-| Return 1 (pending) | 10 | 9 | `{ p: 1 }` | 9 |
-| Sale syncs | 8 | 9 | `{ p: 0 }` — **clamped** | **8** (wrong; should be 9) |
+| Return 1 (unsynced) | 10 | 9 | `{ p: 1 }` | 9 |
+| Sale syncs | 8 | 9 | `{ p: -1 }` | 9 |
 | Return syncs | 9 | 9 | `{}` | 9 |
 
-The net formula is `server − (unsynced sales − unsynced returns)`. Because the
-return delta is negative, subtracting it **adds** the returned units back to the
-pulled figure, matching the local increment. But the implementation clamps each
-return subtraction at 0, which throws the signed delta away. Once the sale has
-synced, there is no positive sale delta left to absorb the return, so the map
-becomes `0` instead of `-1` and the pull writes the server’s pre-return figure.
-The correct implementation keeps the delta signed and clamps only the final
-stock written to the catalogue:
+Because the return delta is negative, subtracting it **adds** the returned units
+back to the pulled figure. The final `Math.max(0, …)` is the only clamp, and it
+applies to the stock actually written to the catalogue.
 
-```ts
-byProduct.set(
-  item.product_id,
-  (byProduct.get(item.product_id) ?? 0) - item.quantity,
-);
-// …
-stockQuantity: Math.max(0, row.stock_quantity - (pending.get(row.id) ?? 0)),
-```
+The transaction boundary is the other half of the guarantee. A return that
+commits before the pending map is read is included in the delta; a return that
+commits after the map is read waits for the pull to commit and then increments
+the freshly pulled stock. A failed (`status = "error"`) return still has
+`syncedAt = null` in the ledger, so it is included and survives a manual
+“Refresh catalogue”.
 
-This is not an edge case: “sale synced, then a return is rung up, then the
-catalogue is refreshed before the return syncs” is the ordinary path. The
-current clamp silently drops the returned unit until the return push succeeds.
+The current implementation is robust to:
 
-What it handles correctly:
+- A pending return with no matching unsynced sale (the ordinary “sale synced,
+  return rung up, refresh before the return syncs” path).
+- A failed return push; the ledger stays unsynced and is retried.
+- A return for a product that is merely deactivated (`active = false`): the row
+  still exists, so the stock update applies.
+- An RPC success followed by a crash before the ledger stamp: the queue row is
+  still present, the ledger stamp is retried, and the server replay is free.
+- Two tabs: one returning and one pulling serialise on the Dexie stores.
 
-- A pending return made while offline, **with an equal or larger pending sale
-  on the same product**, followed by a catalogue pull after a reconnect that has
-  not yet pushed the return.
-- A sale and a return for the same product, both pending, netting correctly
-  **as long as the net delta is non-negative**. A pending return that exceeds
-  the unsynced sale quantity is clamped and lost (see below).
-- A return for a product that was merely **deactivated** (`active = false`):
-  the product row still exists, so the FK and the stock `UPDATE` both apply.
-  Whether an inactive product should receive stock is a business decision this
-  function does not encode.
-- Sales whose `syncedAt` is null regardless of queue status.
+### 6.5 Known defects in the pre-fix return flow
 
-What it does **not** handle:
-
-- The `Math.max(0, …)` clamp on the return delta. Any pending return that has no
-  matching unsynced sale is erased by the next pull — the normal “sale synced,
-  return rung up, refresh before sync” path. This is the most likely way the
-  till silently loses returned stock.
-- Returns in `status = "error"`. They are excluded by the `.filter(entry =>
-  entry.status === "pending")`, even though `syncReturns()` retries them. A
-  catalogue pull after a failed return will reset local stock to the server’s
-  lower figure, losing the returned unit.
-- A return that commits **after** the pending map is computed but **before**
-  `bulkPut`. The map is read outside the write transaction, so the pull can
-  overwrite the just-incremented stock.
-- A return whose RPC succeeded but whose queue row was not deleted (crash after
-  server commit). The pending map subtracts it again, undercounting after a
-  manual “Refresh catalogue” until the next full sync repairs it.
-- A return with two lines for the same product. The server’s `UPDATE … FROM`
-  with duplicate `product_id` rows applies an arbitrary one, while the local
-  loop adds both. Local and server diverge. The current UI returns one line at
-  a time, so this is latent, but the RPC and table should enforce or aggregate
-  duplicates.
-- A return for a product that is **missing** from `products` (hard-deleted, or
-  created locally but never pushed). The `pos_return_items` insert violates
-  `product_id → products(id)` and the whole return fails; the `UPDATE` join
-  never runs. A delisted-but-present (`active = false`) product is fine.
-- A return whose original sale has not reached the server. `original_sale_id`
-  points at `pos_sales(id)`; the insert fails with `23503` until the sale
-  syncs. `runSync` pushes sales first, so this only surfaces when a sale push
-  is failing. Then null the reference if the sale is unknown.
-- Repeat returns of the same sale line. Nothing tracks already-returned units,
-  so a manager can return the same unit repeatedly, inflating stock both
-  locally and on the server.
-
-### 6.5 Known defects in the current return flow
+> This table is the original audit. B1–B13 are fixed by Phases 0–3, except for
+> the client-side manager PIN boundary (B11) and the limitations listed at the
+> end of §6.1. It is kept so the reasoning behind each guard is not lost.
 
 | # | Defect | Where | Effect |
 | --- | --- | --- | --- |
@@ -1599,6 +1592,10 @@ What it does **not** handle:
 | B13 | `pos_record_return` trusts `original_sale_id` and `product_id` foreign keys | `017_pos_returns.sql` | A return for an unsynced sale or an unpushed/deleted product fails with `23503` and never applies stock |
 
 ### 6.6 Recommended fix plan for Feature B
+
+> **Status:** the P0 items shipped in Phase 0/1. Items 8–11 shipped in Phase 3
+> (`local_returns`, over-return guard, refunds, duplicate-line aggregation).
+> The snippets below are the original plan, not the current implementation.
 
 **P0 — correctness, before any new return feature ships**
 
@@ -1749,9 +1746,12 @@ What it does **not** handle:
 - Return 1 of 2 units from a sale: local stock +1, server stock +1, receipt
   line remains 2, return records quantity 1.
 - Return the same line again: the UI limits the second return to the remaining
-  unit, or refuses it.
+  unit, or refuses it. The server also rejects a request beyond the remainder.
+- Record a cash refund: the ledger and `pos_returns` store the amount, method
+  and optional reference, and the cash drawer's expected total drops by it.
+- Record a zero refund: the return is stock-only and `refund_method` is `NULL`.
 - Go offline, return an item, reload, pull the catalogue manually: stock keeps
-  the returned unit.
+  the returned unit and the ledger row survives.
 - Complete a sale, let it sync, then return one unit and refresh the catalogue
   before the return pushes: local stock still includes the returned unit.
 - Force a return push failure (bad manager id / network): the queue row is
@@ -1771,9 +1771,14 @@ What it does **not** handle:
   hard failure.
 - Two tabs: one returns, the other pulls; stock remains consistent.
 
+Automated: `pnpm test:rls` runs 10 anon-boundary checks, including direct-write
+denial, FK-safe returns, refund storage, replay idempotency, over-return
+rejection and the final stock quantity. The Dexie v3 upgrade and the dialog flow
+still need the browser/offline run-through.
+
 ---
 
-## 7. Feature C — POS-side inventory creation (partial)
+## 7. Feature C — POS-side inventory creation (implemented; images/colours till-only)
 
 ### 7.1 What exists today
 
@@ -2126,6 +2131,13 @@ Severity: **C**ritical / **H**igh / **M**edium / **L**ow.
 | R27 | Catalogue pull is unpaginated | M | Above the PostgREST row cap, the “absent from response” delete removes valid local products | Page the select; delete only after the final page |
 | R28 | Return RPC trusts sale/product foreign keys | H | Returns fail (`23503`) for unpushed products or unsynced sales, so stock never returns | Null unknown references server-side; resolve optional UUIDs on the client |
 
+> **Current status:** R01–R09, R12, R14–R16, R23–R24, R26 and R28 are fixed by
+> Phases 0–3. R18 is partly addressed by the server-side `pnpm test:rls`, but
+> the money/stock unit tests are still missing. The live risks are R10–R11
+> (VFD), R13 (receipt email), R17 (cross-tab sync), R19–R22 (storage, service
+> worker, client-side manager PIN), R25 (VFD payment reference) and R27
+> (unpaginated catalogue pull).
+
 ### 8.2 Ensuring the VFD never blocks the cashier UI
 
 Non-negotiable rules:
@@ -2286,6 +2298,10 @@ Rules:
 | Pull during pending return | Offline return → online → Refresh catalogue before sync | Stock keeps +1 (`pendingStockByProduct`) |
 | Pull after synced sale | Sell 1 (sync) → return 1 → Refresh catalogue before the return syncs | Stock keeps +1; not reset by the pull |
 | Failed return | Force RPC error | Queue `error`, stock stays +1, pull keeps +1 |
+| Partial return | Sell 2 → return 1 → reopen the sale | Item shows 1 of 2 left; a second return can only take 1 |
+| Repeat return | Return the last unit → reopen the sale | Item shows fully returned; RPC also rejects an over-return |
+| Refund | Return with cash / M-Pesa / card refund | Ledger and `pos_returns` store amount, method and reference |
+| Cash-drawer refund | Open a drawer → cash sale → cash refund → close | Expected cash is float + cash sales − cash refunds |
 | Product create offline | Offline → create product | Local product visible, queue `product` pending |
 | Pull during pending product | Offline create → online → Refresh catalogue | Product still present; not deleted |
 | Failed product push | Force RLS error | Queue `error`, product remains, clear error surfaced |
@@ -2361,6 +2377,14 @@ UI says the local ones are not published rather than implying they are.
 4. Add server-side duplicate-line aggregation and quantity validation.
 5. Add a returns view to the manager dashboard (optional).
 
+**Status:** items 1–4 are implemented in `020_pos_returns_ledger.sql`,
+`lib/db.ts` (Dexie v3), `lib/returns.ts`, `lib/sync.ts` and
+`components/pos/return-dialog.tsx`. Item 5 is deferred; the ledger is queried
+for repeat-return prevention and the cash-drawer expected total, but there is no
+manager-facing returns page yet. `supabase/tests/phase1_server_boundaries.sql`
+covers 10 anon/return boundary cases, including refund storage and over-return
+rejection.
+
 ### Phase 4 — Feature A VFD
 
 This is independent of Phases 0–3 and can run in parallel by one engineer. It
@@ -2402,7 +2426,7 @@ wrong.
 | Returns UI | `components/pos/return-dialog.tsx`, `components/pos/return-pin-dialog.tsx` |
 | Product creation UI | `components/manager/product-form.tsx` |
 | Customer display (planned) | `lib/customer-display.ts`, `hooks/use-customer-display.ts`, `components/pos/customer-display-control.tsx` |
-| DB policies/RPCs | `supabase/migrations/012–018` (019 planned) |
+| DB policies/RPCs | `supabase/migrations/012–020` |
 
 ---
 
