@@ -19,9 +19,13 @@ import type { SaleTotals } from "@/lib/sales";
  * down; the only useful thing the till can do there is insist on the code and
  * record it against the sale.
  *
- * Neither is integrated with a payment provider yet. That is deliberate for
- * Phase 2: the counter records what happened, and the API handshake is a later
- * job that must not be able to block a sale.
+ * M-Pesa is the exception that now has a real provider behind it: Lipa Na M-Pesa
+ * (STK Push) via `/api/pos/mpesa/stk-push`, with the prompt sent from the server
+ * (the Consumer Secret and Passkey never leave it) and the outcome logged and
+ * parsed at `/api/pos/mpesa/callback`. Until those are configured the till
+ * degrades to the manual fallback — the cashier reads the confirmation code off
+ * the customer's phone and types it, exactly as before — so a sale can never be
+ * blocked by an unattended payment provider.
  *
  * Quick-tender buttons are the notes that actually circulate in Nairobi, in
  * descending order, so the common case is one tap.
@@ -32,6 +36,13 @@ const QUICK_TENDER = [1000, 500, 200, 100];
 /** Shortest code accepted for M-Pesa or card. Real codes are longer; this only
  * rejects an obviously half-typed one. */
 const MIN_REFERENCE_LENGTH = 4;
+
+/** The cashier's M-Pesa states. `idle` offers the prompt and the manual route;
+ * `sending` is the in-flight prompt; `waiting` is the prompt dispatched and the
+ * customer is being asked to approve; `manual` is the fallback where the cashier
+ * reads the confirmation code off the phone and types it.
+ */
+type MpesaPhase = "idle" | "sending" | "waiting" | "manual";
 
 export interface CheckoutResult {
   paymentMethod: PosPaymentMethod;
@@ -100,6 +111,10 @@ function CheckoutForm({
   const [tendered, setTendered] = useState("");
   const [reference, setReference] = useState("");
 
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [mpesaPhase, setMpesaPhase] = useState<MpesaPhase>("idle");
+  const [mpesaError, setMpesaError] = useState<string | null>(null);
+
   const tenderedInputRef = useRef<HTMLInputElement>(null);
 
   const tenderedValue = useMemo(() => parseMoney(tendered), [tendered]);
@@ -110,7 +125,68 @@ function CheckoutForm({
   const canConfirm =
     !saving &&
     itemCount > 0 &&
-    (method === "cash" ? tenderedValue >= totals.totalKes : referenceReady);
+    (method === "cash"
+      ? tenderedValue >= totals.totalKes
+      : method === "mpesa"
+        ? mpesaPhase === "manual" && referenceReady
+        : referenceReady);
+
+  async function handleSendStkPush(): Promise<void> {
+    if (saving) return;
+
+    const digits = phoneNumber.replace(/[^\d]/g, "");
+    if (digits.length < 9) {
+      setMpesaError("Enter the customer's phone number to send the M-Pesa prompt.");
+      return;
+    }
+
+    setMpesaPhase("sending");
+    setMpesaError(null);
+
+    try {
+      const response = await fetch("/api/pos/mpesa/stk-push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amountKes: totals.totalKes,
+          phoneNumber: phoneNumber.trim(),
+          accountReference: `PED-${Date.now()}`,
+        }),
+      });
+      const data = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+      } | null;
+
+      if (!response.ok || data?.ok !== true) {
+        // Robust fallback: the prompt could not be sent, so fall back to the
+        // cashier reading the confirmation code off the customer's phone rather
+        // than dead-ending the sale.
+        setMpesaError(
+          `The M-Pesa prompt could not be sent (${data?.error ?? `HTTP ${response.status}`}). Enter the customer's confirmation code manually instead.`,
+        );
+        setMpesaPhase("manual");
+        return;
+      }
+
+      setMpesaPhase("waiting");
+    } catch {
+      setMpesaError(
+        "Could not reach the M-Pesa service. Enter the customer's confirmation code manually instead.",
+      );
+      setMpesaPhase("manual");
+    }
+  }
+
+  function handleMethodChange(value: PosPaymentMethod) {
+    setMethod(value);
+    // Leaving M-Pesa resets its state; arriving starts a clean prompt flow.
+    if (value !== "mpesa") {
+      setMpesaPhase("idle");
+      setPhoneNumber("");
+      setMpesaError(null);
+    }
+  }
 
   return (
     <form
@@ -149,15 +225,15 @@ function CheckoutForm({
           <MethodOption
             value="mpesa"
             current={method}
-            onSelect={setMethod}
+            onSelect={handleMethodChange}
             icon={<Smartphone aria-hidden="true" className="size-4" />}
             label="M-Pesa"
-            hint="Record the code"
+            hint="Send prompt or code"
           />
           <MethodOption
             value="card"
             current={method}
-            onSelect={setMethod}
+            onSelect={handleMethodChange}
             icon={<CreditCard aria-hidden="true" className="size-4" />}
             label="Card"
             hint="Record reference"
@@ -230,12 +306,10 @@ function CheckoutForm({
             </span>
           </div>
         </div>
-      ) : (
+      ) : method === "card" ? (
         <div className="rounded-2xl border border-border bg-well/50 p-4">
           <label htmlFor="payment-reference" className="text-sm font-semibold text-muted">
-            {method === "mpesa"
-              ? "M-Pesa confirmation code"
-              : "Card reference"}
+            Card reference
           </label>
           <input
             id="payment-reference"
@@ -243,17 +317,101 @@ function CheckoutForm({
             spellCheck={false}
             value={reference}
             onChange={(event) => setReference(event.target.value.toUpperCase())}
-            placeholder={
-              method === "mpesa" ? "e.g. SJK7Q2LM1P" : "e.g. 004123"
-            }
+            placeholder="e.g. 004123"
             maxLength={24}
             className="mt-2 h-14 w-full rounded-xl border border-border bg-card px-4 font-mono text-xl font-semibold tracking-[0.12em] text-foreground uppercase transition-colors outline-none placeholder:text-muted/40 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           />
           <p className="mt-3 text-xs leading-5 text-muted">
-            {method === "mpesa"
-              ? "Read it off the customer's phone. It goes on the receipt, so it can be matched against the M-Pesa statement later."
-              : "Read it off the card terminal slip. It goes on the receipt for reconciliation against the card settlement."}
+            Read it off the card terminal slip. It goes on the receipt for reconciliation against the card settlement.
           </p>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-border bg-well/50 p-4">
+          {mpesaPhase === "manual" ? (
+            <>
+              <label htmlFor="payment-reference" className="text-sm font-semibold text-muted">
+                M-Pesa confirmation code
+              </label>
+              <input
+                id="payment-reference"
+                autoComplete="off"
+                spellCheck={false}
+                value={reference}
+                onChange={(event) => setReference(event.target.value.toUpperCase())}
+                placeholder="e.g. SJK7Q2LM1P"
+                maxLength={24}
+                className="mt-2 h-14 w-full rounded-xl border border-border bg-card px-4 font-mono text-xl font-semibold tracking-[0.12em] text-foreground uppercase transition-colors outline-none placeholder:text-muted/40 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              />
+              <p className="mt-3 text-xs leading-5 text-muted">
+                Read it off the customer&apos;s phone. It goes on the receipt, so it can be matched against the M-Pesa statement later.
+              </p>
+            </>
+          ) : (
+            <>
+              <label htmlFor="mpesa-phone" className="text-sm font-semibold text-muted">
+                Customer phone number
+              </label>
+              <input
+                id="mpesa-phone"
+                inputMode="tel"
+                autoComplete="off"
+                aria-label="Customer phone number"
+                value={phoneNumber}
+                onChange={(event) => setPhoneNumber(event.target.value)}
+                placeholder="e.g. 0700123456"
+                disabled={mpesaPhase === "sending"}
+                className="mt-2 h-14 w-full rounded-xl border border-border bg-card px-4 font-mono text-xl font-semibold tracking-[0.12em] text-foreground tabular-nums transition-colors outline-none placeholder:text-muted/40 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
+              />
+              {mpesaPhase === "idle" ? (
+                <button
+                  type="button"
+                  onClick={() => void handleSendStkPush()}
+                  disabled={saving}
+                  className="mt-3 h-12 w-full rounded-xl bg-primary text-sm font-semibold text-cream transition-colors hover:bg-primary-deep disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  Send M-Pesa prompt
+                </button>
+              ) : null}
+              {mpesaPhase === "idle" ? (
+                <button
+                  type="button"
+                  onClick={() => setMpesaPhase("manual")}
+                  disabled={saving}
+                  className="mt-2 h-12 w-full rounded-xl border border-border bg-card text-sm font-semibold text-muted transition-colors hover:border-primary/35 hover:text-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  Enter the code manually
+                </button>
+              ) : null}
+            </>
+          )}
+
+          {mpesaPhase === "sending" ? (
+            <p role="status" className="mt-3 text-sm font-medium text-muted">
+              Sending the M-Pesa prompt…
+            </p>
+          ) : null}
+
+          {mpesaPhase === "waiting" ? (
+            <div className="mt-3 flex flex-col gap-3">
+              <p role="status" className="text-sm font-medium text-success">
+                Prompt sent — waiting for {phoneNumber.trim()} to approve.
+              </p>
+              <button
+                type="button"
+                onClick={() => setMpesaPhase("manual")}
+                disabled={saving}
+                className="h-12 w-full rounded-xl border border-border bg-card text-sm font-semibold text-muted transition-colors hover:border-primary/35 hover:text-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+                Enter the code manually
+              </button>
+            </div>
+          ) : null}
+
+          {mpesaError !== null ? (
+            <p role="alert" className="mt-3 text-sm font-medium text-danger">
+              {mpesaError}
+            </p>
+          ) : null}
         </div>
       )}
 
