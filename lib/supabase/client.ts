@@ -34,16 +34,42 @@ interface SupabaseConfig {
   anonKey: string;
 }
 
+/** The local Supabase stack's API port, per supabase/config.toml. */
+const LOCAL_SUPABASE_URL = "http://127.0.0.1:54321";
+
+/**
+ * The local Supabase anon key.
+ *
+ * This is generated per project when you run `supabase start` — get it with
+ * `supabase status` and set NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local. The
+ * placeholder below keeps the till pointing at the local stack during
+ * development even before the real key is copied over; replace it before the
+ * till handles real money.
+ */
+const LOCAL_SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1zZXJ2aWNlLXJvbGUifQ==.dev-local-placeholder";
+
 /**
  * The configured credentials, or null.
  *
  * Returning null rather than throwing is what lets the whole app build and run
  * with no `.env.local` at all: sync functions become no-ops and the till is
  * simply offline-only, instead of crashing at import time.
+ *
+ * In development the till falls back to the local Supabase stack
+ * (`http://127.0.0.1:54321`) so it works with `supabase start` out of the box.
  */
 export function getSupabaseConfig(): SupabaseConfig | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const isDevelopment = process.env.NODE_ENV === "development";
+
+  let url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  let anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (isDevelopment) {
+    url ??= LOCAL_SUPABASE_URL;
+    anonKey ??= LOCAL_SUPABASE_ANON_KEY;
+  }
+
   if (!url || !anonKey) return null;
   return { url, anonKey };
 }
