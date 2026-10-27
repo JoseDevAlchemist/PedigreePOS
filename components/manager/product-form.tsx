@@ -85,6 +85,7 @@ export function ProductForm({ onSaved }: ProductFormProps) {
   const [price, setPrice] = useState("");
   const [stock, setStock] = useState("0");
   const [barcode, setBarcode] = useState("");
+  const [qrCode, setQrCode] = useState("");
   const [colors, setColors] = useState<string[]>([]);
   const [customColor, setCustomColor] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -164,6 +165,7 @@ export function ProductForm({ onSaved }: ProductFormProps) {
   const basePrice = price.trim() === "" ? 0 : Number.parseInt(price, 10);
   const openingStock = stock.trim() === "" ? 0 : Number.parseInt(stock, 10);
   const barcodeValue = barcode.trim();
+  const qrCodeValue = qrCode.trim();
   const priceValid = Number.isSafeInteger(basePrice) && basePrice > 0;
   const stockValid = Number.isSafeInteger(openingStock) && openingStock >= 0;
   const canSubmit =
@@ -191,6 +193,7 @@ export function ProductForm({ onSaved }: ProductFormProps) {
         slug: baseSlug,
         category,
         barcode: barcodeValue === "" ? null : barcodeValue,
+        qrCode: qrCodeValue === "" ? null : qrCodeValue,
         basePrice,
         discountPercent: 0,
         stockQuantity: openingStock,
@@ -230,6 +233,7 @@ export function ProductForm({ onSaved }: ProductFormProps) {
             slug: product.slug,
             category: product.category,
             barcode: product.barcode,
+            qrCode: product.qrCode ?? null,
             basePrice: product.basePrice,
             stockQuantity: product.stockQuantity,
             colors: product.colors,
@@ -246,6 +250,7 @@ export function ProductForm({ onSaved }: ProductFormProps) {
       setPrice("");
       setStock("0");
       setBarcode("");
+      setQrCode("");
       setColors([]);
       setCustomColor("");
       setImageUrl(null);
@@ -389,6 +394,24 @@ export function ProductForm({ onSaved }: ProductFormProps) {
                 <p className="mt-1 text-xs text-muted">
                   Used by the scanner; must be unique in the catalogue. Leave
                   blank if the product has none.
+                </p>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label htmlFor="product-qr-code" className="text-sm font-semibold text-foreground">
+                  QR Code / Bag Serial Number <span className="font-normal text-muted">(optional)</span>
+                </label>
+                <input
+                  id="product-qr-code"
+                  autoComplete="off"
+                  value={qrCode}
+                  onChange={(event) => setQrCode(event.target.value)}
+                  placeholder="Scan or type the bag serial number"
+                  className="mt-2 h-12 w-full rounded-xl border border-border bg-card px-4 text-sm font-semibold text-foreground transition-colors outline-none placeholder:text-muted/50 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                />
+                <p className="mt-1 text-xs text-muted">
+                  Scanned at the counter to add the bag to a sale. Leave blank
+                  if the product has none.
                 </p>
               </div>
             </div>

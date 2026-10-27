@@ -168,7 +168,7 @@ function requireClient(): SupabaseClient<Database> {
 }
 
 const PRODUCT_COLUMNS =
-  "id,name,slug,category,barcode,base_price,discount_percent,stock_quantity,active,is_website_published";
+  "id,name,slug,category,barcode,qr_code,base_price,discount_percent,stock_quantity,active,is_website_published";
 
 /**
  * The catalogue query, with each product's photography folded in.
@@ -218,6 +218,7 @@ interface ProductRow {
   slug: string;
   category: string;
   barcode: string | null;
+  qr_code: string | null;
   base_price: number;
   discount_percent: number;
   stock_quantity: number;
@@ -413,6 +414,7 @@ export async function fetchProducts(): Promise<number> {
           slug: row.slug,
           category: row.category,
           barcode: row.barcode ?? null,
+          qrCode: row.qr_code ?? null,
           basePrice: row.base_price,
           discountPercent: row.discount_percent,
           // A pending product's local count is the source of truth until its
@@ -590,6 +592,7 @@ async function pushProduct(
     p_slug: product.slug,
     p_category: product.category,
     p_barcode: product.barcode,
+    p_qr_code: product.qrCode ?? null,
     p_base_price: product.basePrice,
     p_discount_percent: product.discountPercent,
     p_stock_quantity: stockAtServerCreation,

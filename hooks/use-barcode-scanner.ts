@@ -14,6 +14,11 @@ import { useEffect, useRef } from "react";
  * half-written product search because they scanned mid-sentence would be worse
  * than not scanning at all. So an editable target, or an open modal, takes the
  * keyboard entirely and this hook steps aside.
+ *
+ * Reads are character based rather than numeric based, so QR codes that carry
+ * letters as well as digits are captured the same way barcodes are: accumulate
+ * every printable character until the scanner's Enter lands, then hand the raw
+ * string to the callback.
  */
 
 interface UseBarcodeScannerOptions {

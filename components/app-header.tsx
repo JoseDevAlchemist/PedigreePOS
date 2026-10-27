@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 
 import { BrandMark } from "@/components/brand-mark";
+import { CustomerDisplayControl } from "@/components/pos/customer-display-control";
 import { NetworkStatus } from "@/components/network-status";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/cn";
@@ -69,6 +70,7 @@ export function AppHeader({ current }: { current: "pos" | "manager" }) {
         </nav>
 
         <div className="ms-auto flex items-center gap-3">
+          <CustomerDisplayControl />
           <TillClock />
           <NetworkStatus />
 

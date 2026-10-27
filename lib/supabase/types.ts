@@ -24,6 +24,7 @@ export type Database = {
           base_price: number;
           base_price_usd: number | null;
           barcode: string | null;
+          qr_code: string | null;
           category: string;
           created_at: string;
           description: string;
@@ -40,6 +41,7 @@ export type Database = {
           base_price: number;
           base_price_usd?: number | null;
           barcode?: string | null;
+          qr_code?: string | null;
           category: string;
           created_at?: string;
           description?: string;
@@ -56,6 +58,7 @@ export type Database = {
           base_price?: number;
           base_price_usd?: number | null;
           barcode?: string | null;
+          qr_code?: string | null;
           category?: string;
           created_at?: string;
           description?: string;
@@ -189,6 +192,7 @@ export type Database = {
           p_slug: string;
           p_category: string;
           p_barcode: string | null;
+          p_qr_code?: string | null;
           p_base_price: number;
           p_discount_percent: number;
           p_stock_quantity: number;

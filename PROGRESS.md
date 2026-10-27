@@ -57,3 +57,80 @@ date/time, files created/modified, brief change description, manual steps for th
   2. Set the Daraja callback URL to the public tunnel, e.g. `https://<your-ngrok-url>.ngrok.io/api/pos/mpesa/callback`.
   3. Run `pnpm dev`, test the STK push against the Safaricom sandbox (shortcode 174379), then switch `MPESA_ENV=production` for live money.
   4. Remove the placeholder/manual fallback only when the STK push flow is proven against real money.
+
+---
+
+## 2026-10-28 — Task start — Customer-Facing LED Screen (VFD) + QR Code integration
+
+- **Files created/modified:** none yet for this task.
+- **Change:** Started a new feature task on top of the M-Pesa work: Customer-Facing LED Screen (Web Serial VFD via `@point-of-sale/webserial-customer-display`) and QR Code integration for scanning/searching bags.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 1/8 — Dependency install
+
+- **Files created/modified:** `package.json`, `pnpm-lock.yaml` (via `pnpm add @point-of-sale/webserial-customer-display`).
+- **Change:** Installed `@point-of-sale/webserial-customer-display@1.0.0`.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 2/8 — Web Serial type declarations
+
+- **Files created/modified:** `types/webserial-customer-display.d.ts`.
+- **Change:** Declared the ambient module shape (options, connected-event payload, device, connect/reconnect/line/clear API) for the typed package.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 3/8 — Customer display controller
+
+- **Files created/modified:** `lib/customer-display.ts`.
+- **Change:** Singleton external-store controller (`getCustomerDisplayState`/`subscribeCustomerDisplay`) with `paintCustomerDisplay`, `clearCustomerDisplay`, `connectCustomerDisplay`, `tryReconnectCustomerDisplay`; latest-wins pending paint flushed on connect; device id persisted to `localStorage`.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 4/8 — Customer display hook + control
+
+- **Files created/modified:** `hooks/use-customer-display.ts`, `components/pos/customer-display-control.tsx`, `components/app-header.tsx`.
+- **Change:** `useSyncExternalStore` hook wraps the controller; header shows "Connect Display" / green "Display Connected" pill.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 5/8 — POS screen integration
+
+- **Files created/modified:** `components/pos/pos-screen.tsx`.
+- **Change:** `useEffect` paints `totals.totalKes` on change via `paintCustomerDisplay`; cart-empty → paints 0.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 6/8 — Web Serial build wiring
+
+- **Files created/modified:** `next.config.ts`.
+- **Change:** Added webpack `resolve.conditionNames` entry `browser`, because the package publishes only a `browser` export condition and the server-side webpack build could not resolve it.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 7/8 — QR code database + sync
+
+- **Files created/modified:** `lib/db.ts`, `lib/sync.ts`, `lib/supabase/types.ts`.
+- **Change:** `LocalProduct.qrCode` added; Dexie schema bumped to v4 with `qrCode` index on `products`; `fetchProducts` selects/maps `qr_code`; `pushProduct` sends `p_qr_code`; Supabase product types and `pos_create_product` RPC args extended with `qr_code`.
+- **Manual steps needed:** Add the `qr_code` column to the Supabase `products` table (and the `pos_create_product` RPC parameter) if it does not already exist server-side.
+
+## 2026-10-28 — Step 8/8 — QR code search, scan, manager form
+
+- **Files created/modified:** `components/pos/pos-screen.tsx`, `hooks/use-barcode-scanner.ts`, `components/manager/product-form.tsx`.
+- **Change:** Search now matches `qrCode`; `findByCode` resolves barcode → QR code → slug; scanner docs note alphanumeric/QR capture; manager form gained "QR Code / Bag Serial Number" saved to `qrCode` and queued with the product sync entry.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Task in progress — Customer-Facing LED Screen (VFD) + QR Code integration
+
+- **Files created/modified:** `types/webserial-customer-display.d.ts`, `lib/customer-display.ts`, `hooks/use-customer-display.ts`, `components/pos/customer-display-control.tsx`, `components/app-header.tsx`, `components/pos/pos-screen.tsx`, `hooks/use-barcode-scanner.ts`, `components/manager/product-form.tsx`, `lib/db.ts`, `lib/sync.ts`, `lib/supabase/types.ts`, `next.config.ts`, `package.json`, `pnpm-lock.yaml`.
+- **Change:** Full implementation of the customer display (Web Serial VFD, external store, latest-wins paint, reconnect, header pill) and QR integration (db, index, sync, search, scan, manager form).
+- **Checklist:**
+  - [x] Dependency install.
+  - [x] Web Serial types.
+  - [x] Controller singleton + external store + latest-wins queue + reconnect.
+  - [x] Hook + header control.
+  - [x] POS screen paint effect.
+  - [x] Build wiring (`next.config.ts`).
+  - [x] QR db/sync.
+  - [x] QR search/scan/manager.
+  - [ ] Verification (`pnpm lint`, `tsc --noEmit`, `pnpm build`) run after all edits settle.
+  - [ ] Manual steps: real VFD hardware, real QR values, server-side `qr_code` column.
+
+- **Manual steps needed:**
+  1. Connect a Web Serial customer display (Bixalon/DigiPos) to the till browser and grant serial permission; verify the VFD shows `TOTAL: KES [amount]`.
+  2. Add real QR / bag serial numbers in the manager inventory form and confirm the scanner adds bags from QR.
+  3. Add the `qr_code` column to the Supabase `products` table (and the `pos_create_product` RPC parameter) if it does not already exist server-side.

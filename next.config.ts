@@ -72,6 +72,19 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  webpack: (config) => {
+    // `@point-of-sale/webserial-customer-display` publishes its entry through a
+    // `browser` export condition only, so webpack's default resolver (which
+    // prefers the `node` condition when compiling for the server) refuses to
+    // resolve it and the production build fails. The Web Serial API is
+    // client-only by nature — but Next still bundles client components into the
+    // server render — so teach webpack about the browser build.
+    config.resolve = {
+      ...config.resolve,
+      conditionNames: [...(config.resolve.conditionNames ?? []), "browser"],
+    };
+    return config;
+  },
 };
 
 export default withSerwist(nextConfig);

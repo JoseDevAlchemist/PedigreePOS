@@ -24,6 +24,7 @@ import { cn } from "@/lib/cn";
 import type { LocalProduct, LocalSale } from "@/lib/db";
 import { effectivePrice } from "@/lib/format";
 import { completeSale, calculateTotals } from "@/lib/sales";
+import { useCustomerDisplay } from "@/hooks/use-customer-display";
 
 /**
  * The till.
@@ -93,6 +94,16 @@ export function PosScreen() {
     [cart],
   );
 
+  const { paint: paintCustomerDisplay } = useCustomerDisplay();
+
+  // The customer-facing VFD paints the running total. Only the total is ever
+  // painted — no item names, line prices or tender/change figures. An emptied
+  // cart lands on 0 through the same path, because clearing the cart zeroes
+  // the totals.
+  useEffect(() => {
+    paintCustomerDisplay(totals.totalKes);
+  }, [totals.totalKes, paintCustomerDisplay]);
+
   const categories = useMemo(() => {
     const set = new Set<string>();
     for (const product of products) set.add(product.category);
@@ -132,7 +143,7 @@ export function PosScreen() {
     (code: string) => {
       const product = findByCode(products, code);
       if (product === null) {
-        flash("warn", `No product with barcode ${code}`);
+        flash("warn", `No product with code ${code}`);
         return;
       }
       if (product.stockQuantity <= 0) {
@@ -359,7 +370,7 @@ function CategoryChip({
 }
 
 /**
- * Look a code up the way a scanner expects: barcode first, then slug.
+ * Look a code up the way a scanner expects: barcode, then QR code, then slug.
  *
  * Case-insensitive, because scanner output case is a coin toss, and exact — a
  * partial match on a scan would add the wrong product, which is worse than not
@@ -372,10 +383,12 @@ export function findByCode(
   const needle = code.trim().toLowerCase();
   if (needle.length === 0) return null;
 
+  const matches = (value: string | null | undefined) =>
+    value !== null && value !== undefined && value.toLowerCase() === needle;
+
   return (
-    products.find(
-      (product) => (product.barcode ?? "").toLowerCase() === needle,
-    ) ??
+    products.find((product) => matches(product.barcode)) ??
+    products.find((product) => matches(product.qrCode)) ??
     products.find((product) => product.slug.toLowerCase() === needle) ??
     null
   );
@@ -397,6 +410,7 @@ function filterProducts(
       product.name.toLowerCase().includes(needle) ||
       product.slug.toLowerCase().includes(needle) ||
       (product.barcode ?? "").toLowerCase().includes(needle) ||
+      (product.qrCode ?? "").toLowerCase().includes(needle) ||
       product.category.toLowerCase().includes(needle)
     );
   });

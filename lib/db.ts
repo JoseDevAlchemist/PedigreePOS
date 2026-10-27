@@ -57,6 +57,12 @@ export interface LocalProduct {
   colors: string[];
   /** Whether the product may be published to the storefront. Defaults false. */
   isWebsitePublished: boolean;
+  /**
+   * The QR code / bag serial number the cashier scans at the counter. Optional
+   * so pre-QR products keep selling exactly as before; the till and the sync
+   * engine both carry it as `qr_code`.
+   */
+  qrCode?: string | null;
 }
 
 export interface LocalPosUser {
@@ -313,6 +319,13 @@ class PosDatabase extends Dexie {
           if (localReturn !== null) await ledger.put(localReturn);
         }
       });
+
+    // v4 adds the QR code / bag serial number to the catalogue index, so a QR
+    // scan resolves a product exactly like a barcode scan does. Only the index
+    // is added; the column is optional on the row and the table carries forward.
+    this.version(4).stores({
+      products: "id, name, slug, barcode, qrCode, category, active, updatedAt",
+    });
   }
 }
 
