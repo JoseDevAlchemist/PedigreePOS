@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { BrandMark } from "@/components/brand-mark";
+import { BrandPanel } from "@/components/auth/brand-panel";
 import { PinLogin } from "@/components/auth/pin-login";
 import { SyncProvider } from "@/components/sync-provider";
 
@@ -15,36 +16,17 @@ export const metadata: Metadata = {
  * other half carries the keypad. Below `lg` the brand panel steps aside and the
  * keypad is all that matters, centred on the screen.
  *
- * The brand panel is a smooth solid dark brown with no decorative stripe, and
- * the Pedigree lockup is large and centred so the machine is unmistakable from
- * across the counter.
+ * The brand half is the `BrandPanel` component: a rich dark-leather surface
+ * dressed by a radial glow, ghosted saddle-stitch artwork, and the lockup held
+ * in a frosted glass panel that fades in on load.
  */
 export default function LoginPage() {
   return (
     <>
       <SyncProvider />
       <main className="relative h-screen min-h-screen flex-1 lg:grid lg:grid-cols-2">
-        {/* Left: brand panel. A solid dark brown surface, large centred logo. */}
-        <section
-          aria-hidden="true"
-          className="hidden lg:flex flex-col items-center justify-center gap-6 p-16 bg-primary-dark text-cream"
-        >
-          <BrandMark size={140} />
-          <div className="text-center max-w-xs">
-            <p className="text-[0.75rem] font-semibold tracking-[0.28em] text-accent-ink uppercase">
-              Point of Sale
-            </p>
-            <h2 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-cream leading-tight">
-              Pedigree Leather
-            </h2>
-            <p className="mt-4 text-sm leading-6 text-cream/80">
-              The workshop till, built to keep selling when the line goes down.
-            </p>
-          </div>
-          <p className="text-xs text-cream/50">
-            Pedigree Leather &middot; Nairobi
-          </p>
-        </section>
+        {/* Left: brand panel. */}
+        <BrandPanel />
 
         {/* Right: PIN keypad, perfectly centred. */}
         <section className="flex h-full min-h-screen items-center justify-center bg-background px-6 py-14 lg:px-12 lg:py-0">

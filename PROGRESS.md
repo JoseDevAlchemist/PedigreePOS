@@ -134,3 +134,47 @@ date/time, files created/modified, brief change description, manual steps for th
   1. Connect a Web Serial customer display (Bixalon/DigiPos) to the till browser and grant serial permission; verify the VFD shows `TOTAL: KES [amount]`.
   2. Add real QR / bag serial numbers in the manager inventory form and confirm the scanner adds bags from QR.
   3. Add the `qr_code` column to the Supabase `products` table (and the `pos_create_product` RPC parameter) if it does not already exist server-side.
+
+---
+
+## 2026-10-28 — Task: Login screen brand panel redesign + favicon fix (started)
+
+- **Files created/modified:** none yet for this task.
+- **Change:** Started a new task: redesign the login screen's left-hand brand panel (premium leather aesthetic, glassmorphism, hero art, Framer Motion) and fix the browser tab favicon (remove default Next.js `app/favicon.ico`, use the Pedigree logo).
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 1/4 — Favicon fix
+
+- **Files created/modified:** `app/favicon.ico` (deleted).
+- **Change:** Deleted the default Next.js `app/favicon.ico`; the Pedigree logo is served via `app/icon.png` + `metadata.icons.icon: "/pedigree-logo.png"` in `app/layout.tsx`.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 2/4 — Brand panel component
+
+- **Files created/modified:** `components/auth/brand-panel.tsx` (new, client).
+- **Change:** New `BrandPanel` client component with the redesigned left-hand brand panel.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 3/4 — Login page composition
+
+- **Files created/modified:** `app/login/page.tsx`.
+- **Change:** Composes the new `BrandPanel` into the existing 50/50 split layout.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 4/4 — Verification
+
+- **Files created/modified:** pending.
+- **Change:** Pending.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Task in progress — Login brand panel redesign + favicon fix
+
+- **Files created/modified:** pending final write-up.
+- **Change:** Redesigning the login left panel (dark leather radial-gradient background, saddle-stitch SVG hero art at low opacity, larger logo with drop shadow, glassmorphism container, Framer Motion fade-in, serif heading, tracked-out subtitle) and fixing the favicon (delete `app/favicon.ico`, use Pedigree logo).
+- **Checklist:**
+  - [ ] Favicon: delete `app/favicon.ico`, keep Pedigree logo via metadata + `app/icon.png`.
+  - [ ] Brand panel redesign.
+  - [ ] `pnpm lint`, `tsc --noEmit`, `pnpm build`.
+  - [ ] Manual steps: visual check of the login panel in a browser.
+
+- **Manual steps needed:** none yet.
