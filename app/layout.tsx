@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond, Manrope } from "next/font/google";
 
 import { AuthProvider } from "@/components/auth-provider";
+import { ToastProvider } from "@/components/ui/toast-provider";
 
 import "./globals.css";
 
@@ -57,7 +58,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${manrope.variable} ${cormorant.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-background font-sans text-foreground">
-        <AuthProvider>{children}</AuthProvider>
+        <ToastProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </ToastProvider>
       </body>
     </html>
   );

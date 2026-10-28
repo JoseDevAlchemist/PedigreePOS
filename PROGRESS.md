@@ -172,9 +172,61 @@ date/time, files created/modified, brief change description, manual steps for th
 - **Files created/modified:** pending final write-up.
 - **Change:** Redesigning the login left panel (dark leather radial-gradient background, saddle-stitch SVG hero art at low opacity, larger logo with drop shadow, glassmorphism container, Framer Motion fade-in, serif heading, tracked-out subtitle) and fixing the favicon (delete `app/favicon.ico`, use Pedigree logo).
 - **Checklist:**
-  - [ ] Favicon: delete `app/favicon.ico`, keep Pedigree logo via metadata + `app/icon.png`.
-  - [ ] Brand panel redesign.
-  - [ ] `pnpm lint`, `tsc --noEmit`, `pnpm build`.
+  - [x] Favicon: delete `app/favicon.ico`, keep Pedigree logo via metadata + `app/icon.png`.
+  - [x] Brand panel redesign.
+  - [x] `pnpm lint`, `tsc --noEmit`, `pnpm build`.
   - [ ] Manual steps: visual check of the login panel in a browser.
+
+- **Manual steps needed:** none yet.
+
+---
+
+## 2026-10-28 — Task: Toast notification system + login failure surfacing (started)
+
+- **Files created/modified:** none yet for this task.
+- **Change:** Started a new task: add a global toast notification system and instrument the login flow (PIN login) so hidden failures (empty roster, network errors, invalid PIN, success) surface to the cashier via toasts.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 1/5 — Toast primitives
+
+- **Files created/modified:** pending.
+- **Change:** Pending.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 2/5 — Toast provider + hook
+
+- **Files created/modified:** pending.
+- **Change:** Pending.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 3/5 — Layout + sync provider wiring
+
+- **Files created/modified:** pending.
+- **Change:** Pending.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 4/5 — Login flow instrumentation
+
+- **Files created/modified:** pending.
+- **Change:** Pending.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Step 5/5 — Verification
+
+- **Files created/modified:** pending.
+- **Change:** Pending.
+- **Manual steps needed:** none yet.
+
+## 2026-10-28 — Task in progress — Toast notifications + login failure surfacing
+
+- **Files created/modified:** pending final write-up.
+- **Change:** Global toast system (Framer Motion, success/error/warning/info variants) + login flow toasts (no staff, network, invalid PIN, success) + offline warning + roster-length debug log.
+- **Checklist:**
+  - [x] Toast primitives.
+  - [x] Toast provider + `useToast`.
+  - [x] Provider mounted in `app/layout.tsx`; offline warning in `SyncProvider`.
+  - [x] PIN login instrumentation.
+  - [x] `pnpm lint`, `tsc --noEmit`, `pnpm build`.
+  - [ ] Push to `main` for Vercel deploy.
 
 - **Manual steps needed:** none yet.

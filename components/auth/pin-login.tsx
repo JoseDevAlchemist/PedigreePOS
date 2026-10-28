@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Delete, Loader2, ShieldCheck } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createSession,
   normalizePin,
@@ -29,6 +30,7 @@ type Roster = "checking" | "ready" | "empty";
 
 export function PinLogin() {
   const { status, isAuthenticated, signIn } = useAuth();
+  const { toast } = useToast();
 
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -76,22 +78,43 @@ export function PinLogin() {
       try {
         await fetchPosUsers();
       } catch (error) {
+        // The roster could not be pulled: bad key, RLS block, or a dropped
+        // connection. Either way the cashier cannot sign in from here until the
+        // connection is back, so say so rather than failing silently.
         console.error("Staff sync failed:", error);
+        toast({
+          variant: "error",
+          title: "Network error",
+          description: "Could not fetch staff roster. Are you online?",
+        });
       }
 
       const data = await getDb()
         .pos_users.filter((user) => user.active)
         .toArray();
 
+      // Debug output: roster length once the fetch resolves. Whether Supabase
+      // returned anyone or silently returned an empty array (e.g. RLS) is visible
+      // here in the browser console.
+      console.log("Staff roster length after fetch:", data.length);
+
       if (cancelled) return;
       setLoading(false);
-      setRoster(data.length > 0 ? "ready" : "empty");
+      if (data.length === 0) {
+        toast({
+          variant: "error",
+          description: "Login failed: No staff found on this device. Please sync.",
+        });
+        setRoster("empty");
+        return;
+      }
+      setRoster("ready");
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [rosterToken]);
+  }, [rosterToken, toast]);
 
   // Keep the hidden input focused so a physical keyboard just works.
   useEffect(() => {
@@ -138,6 +161,11 @@ export function PinLogin() {
         const failures = gate.failures + 1;
         setPin("");
 
+        toast({
+          variant: "error",
+          description: "Invalid PIN. Please check with the manager.",
+        });
+
         if (failures >= MAX_ATTEMPTS) {
           setGate({ failures: 0, lockedUntil: Date.now() + LOCKOUT_MS });
           setNow(Date.now());
@@ -151,6 +179,11 @@ export function PinLogin() {
         }
         return;
       }
+
+      toast({
+        variant: "success",
+        title: `Welcome back, ${matched.name}!`,
+      });
 
       signIn(
         createSession({ id: matched.id, name: matched.name, role: matched.role }),
