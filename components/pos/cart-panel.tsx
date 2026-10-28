@@ -3,9 +3,11 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Minus, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 
+import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { cartItemCount, type CartState } from "@/lib/cart";
 import { formatAmount, pluralize } from "@/lib/format";
+import { getDb } from "@/lib/db";
 import type { SaleTotals } from "@/lib/sales";
 
 const DISCOUNT_PRESET = 10;
@@ -44,6 +46,8 @@ export function CartPanel({
   busy?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
+  const [discountCode, setDiscountCode] = useState("");
+  const [discountError, setDiscountError] = useState<string | null>(null);
   const itemCount = cartItemCount(state);
   const empty = state.lines.length === 0;
   const discountOn = totals.discountPercent > 0;
@@ -137,6 +141,30 @@ export function CartPanel({
       </div>
 
       <footer className="border-t border-border px-5 pt-4 pb-5">
+        <div className="mb-3 flex gap-2">
+          <input
+            value={discountCode}
+            onChange={(e) => setDiscountCode(e.target.value)}
+            placeholder="Discount code"
+            className="flex-1 rounded-xl border border-border bg-well/60 px-3 py-2 text-sm"
+          />
+          <button
+            type="button"
+            onClick={async () => {
+              const row = await getDb().pos_discounts.where("code").equals(discountCode.toUpperCase()).first();
+              if (row && row.active) {
+                onSetDiscount(row.percentage);
+                setDiscountError(null);
+              } else {
+                setDiscountError("Invalid code");
+              }
+            }}
+            className="rounded-xl bg-primary px-3 py-2 text-sm text-cream"
+          >
+            Apply
+          </button>
+        </div>
+        {discountError ? <p className="mb-2 text-xs text-danger">{discountError}</p> : null}
         <button
           type="button"
           onClick={() => onSetDiscount(discountOn ? 0 : DISCOUNT_PRESET)}

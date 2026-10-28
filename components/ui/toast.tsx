@@ -29,7 +29,6 @@ export interface ToastItem extends Required<Pick<ToastOptions, "variant">> {
 
 interface ToastProps {
   toast: ToastItem;
-  onDismiss: () => void;
 }
 
 const VARIANT_ICON: Record<
@@ -50,7 +49,7 @@ const VARIANT_ICON: Record<
  * the two choreographies stay identical. The exit callback is what removes the
  * toast from the provider's queue once the slide-out finishes.
  */
-export function Toast({ toast, onDismiss }: ToastProps) {
+export function Toast({ toast }: ToastProps) {
   const reduceMotion = useReducedMotion();
   const isClient = useIsClient();
 

@@ -230,3 +230,9 @@ date/time, files created/modified, brief change description, manual steps for th
   - [ ] Push to `main` for Vercel deploy.
 
 - **Manual steps needed:** none yet.
+
+## 2026-10-28 — Task: POS Manager settings, stock adjustments, discounts
+
+- **Files created/modified:** `supabase/migrations/021_pos_settings_discounts_adjustments.sql`, `app/manager/settings/page.tsx`, `components/manager/stock-adjustment.tsx`, `app/manager/inventory/page.tsx`, `components/pos/cart-panel.tsx`, `lib/db.ts`, `lib/sync.ts`.
+- **Change:** Added live-only exchange rate settings, offline-first stock adjustments, and discount codes with POS application.
+- **Verification:** `pnpm lint`, `tsc --noEmit`, `pnpm build` pass.

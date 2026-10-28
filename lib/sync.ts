@@ -731,6 +731,35 @@ async function markReturnSynced(entry: SyncQueueEntry): Promise<void> {
 /**
  * Push every queued return.
  */
+export async function syncStockAdjustments(): Promise<{ synced: number; failed: number }> {
+  const db = getDb();
+  const client = requireClient();
+  const entries = await db.sync_queue.where("entity").equals("stock_adjustment").toArray();
+  let synced = 0;
+  let failed = 0;
+  for (const entry of entries) {
+    try {
+      const productId = entry.entityId;
+      const delta = Number((entry.payload ?? {}).delta ?? 0);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (client as any).rpc("pos_adjust_stock", { p_product_id: productId, p_delta: delta });
+      if (entry.id !== undefined) await db.sync_queue.delete(entry.id);
+      synced++;
+    } catch (error) {
+      failed++;
+      if (entry.id !== undefined) {
+        await db.sync_queue.update(entry.id, {
+          status: "error",
+          attempts: entry.attempts + 1,
+          lastError: messageOf(error),
+          updatedAt: nowIso(),
+        });
+      }
+    }
+  }
+  return { synced, failed };
+}
+
 export async function syncReturns(): Promise<{
   synced: number;
   failed: number;
@@ -1031,6 +1060,15 @@ export async function runSync(): Promise<SyncSummary> {
       const result = await syncReturns();
       if (result.failed > 0) {
         notices.push(`${result.failed} return(s) could not be sent.`);
+      }
+    } catch (error) {
+      notices.push(messageOf(error));
+    }
+
+    try {
+      const result = await syncStockAdjustments();
+      if (result.failed > 0) {
+        notices.push(`${result.failed} stock adjustment(s) could not be sent.`);
       }
     } catch (error) {
       notices.push(messageOf(error));

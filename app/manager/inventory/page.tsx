@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
 
 import { ProductForm } from "@/components/manager/product-form";
+import { StockAdjustment } from "@/components/manager/stock-adjustment";
 
 export const metadata: Metadata = {
-  title: "Add Product",
+  title: "Inventory",
 };
 
-/**
- * Add a product from the till.
- *
- * Protected by `app/manager/layout.tsx`, so only a manager can reach it.
- */
 export default function InventoryPage() {
-  return <ProductForm />;
+  return (
+    <div>
+      <ProductForm />
+      <StockAdjustment />
+    </div>
+  );
 }

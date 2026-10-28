@@ -155,7 +155,14 @@ export interface LocalReturn {
   syncedAt: string | null;
 }
 
-export type SyncQueueEntity = "sale" | "receipt_email" | "return" | "product";
+export interface LocalDiscount {
+  id: string;
+  code: string;
+  percentage: number;
+  active: boolean;
+}
+
+export type SyncQueueEntity = "sale" | "receipt_email" | "return" | "product" | "stock_adjustment";
 export type SyncQueueStatus = "pending" | "error";
 
 /**
@@ -277,6 +284,7 @@ class PosDatabase extends Dexie {
   pos_users!: EntityTable<LocalPosUser, "id">;
   sync_queue!: EntityTable<SyncQueueEntry, "id">;
   till_sessions!: EntityTable<LocalTillSession, "id">;
+  pos_discounts!: EntityTable<LocalDiscount, "id">;
 
   constructor() {
     super("pedigree-pos");
@@ -325,6 +333,10 @@ class PosDatabase extends Dexie {
     // is added; the column is optional on the row and the table carries forward.
     this.version(4).stores({
       products: "id, name, slug, barcode, qrCode, category, active, updatedAt",
+    });
+
+    this.version(5).stores({
+      pos_discounts: "id, code, active",
     });
   }
 }
