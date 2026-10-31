@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Minus, Plus, ShoppingBag, Trash2, X } from "lucide-react";
+import { FileText, Minus, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 
 import { useState } from "react";
 import { cn } from "@/lib/cn";
@@ -33,6 +33,7 @@ export function CartPanel({
   onClear,
   onSetDiscount,
   onCharge,
+  onCreateQuotation,
   busy = false,
 }: {
   state: CartState;
@@ -43,6 +44,7 @@ export function CartPanel({
   onClear: () => void;
   onSetDiscount: (percent: number) => void;
   onCharge: () => void;
+  onCreateQuotation: () => void;
   busy?: boolean;
 }) {
   const reduceMotion = useReducedMotion();
@@ -214,9 +216,19 @@ export function CartPanel({
 
         <button
           type="button"
+          onClick={onCreateQuotation}
+          disabled={busy}
+          className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm font-semibold text-foreground transition-colors hover:border-primary/35 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <FileText aria-hidden="true" className="size-4" />
+          Create Quotation
+        </button>
+
+        <button
+          type="button"
           onClick={onCharge}
           disabled={empty || busy}
-          className="mt-4 flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-semibold text-cream shadow-card transition-colors hover:bg-primary-deep disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="mt-2 flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-semibold text-cream shadow-card transition-colors hover:bg-primary-deep disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           {busy ? (
             "Saving…"

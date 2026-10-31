@@ -7,6 +7,7 @@ import { AppHeader } from "@/components/app-header";
 import { CartPanel } from "@/components/pos/cart-panel";
 import { CheckoutDialog, type CheckoutResult } from "@/components/pos/checkout-dialog";
 import { ProductGrid } from "@/components/pos/product-grid";
+import { QuotationDialog } from "@/components/pos/quotation-dialog";
 import { ReceiptDialog } from "@/components/pos/receipt-dialog";
 import { ReturnDialog } from "@/components/pos/return-dialog";
 import { ReturnPinDialog } from "@/components/pos/return-pin-dialog";
@@ -67,6 +68,7 @@ export function PosScreen() {
   );
 
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [quotationOpen, setQuotationOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [completedSale, setCompletedSale] = useState<LocalSale | null>(null);
@@ -306,6 +308,7 @@ export function PosScreen() {
               setCheckoutError(null);
               setCheckoutOpen(true);
             }}
+            onCreateQuotation={() => setQuotationOpen(true)}
             busy={saving}
           />
         </aside>
@@ -325,6 +328,13 @@ export function PosScreen() {
         sale={completedSale}
         open={completedSale !== null}
         onClose={() => setCompletedSale(null)}
+      />
+
+      <QuotationDialog
+        open={quotationOpen}
+        onClose={() => setQuotationOpen(false)}
+        products={products}
+        cart={cart}
       />
 
       <ReturnPinDialog

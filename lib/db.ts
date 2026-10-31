@@ -115,6 +115,12 @@ export interface LocalSale {
   createdAt: string;
   /** Null until the sync lands. */
   syncedAt: string | null;
+  /**
+   * True when the browser was offline as the sale was recorded. UI-only: it
+   * tells the receipt dialog to call out that the sale is still on this device.
+   * Older locally-stored sales may not carry it.
+   */
+  createdOffline?: boolean;
   items: LocalSaleItem[];
 }
 

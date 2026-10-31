@@ -173,7 +173,7 @@ export function NetworkStatus({ onSync }: { onSync?: () => void }) {
         disabled={state.syncing || !state.configured}
         className="rounded-full border border-border bg-card px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
-        Sync now
+        Force Sync Now
       </button>
     </div>
   );

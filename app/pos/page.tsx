@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { OnlineOrderNotifications } from "@/components/pos/online-order-notifications";
 import { PosScreen } from "@/components/pos/pos-screen";
 import { RequireAuth } from "@/components/require-auth";
 
@@ -17,6 +18,7 @@ export const metadata: Metadata = {
 export default function PosPage() {
   return (
     <RequireAuth>
+      <OnlineOrderNotifications />
       <PosScreen />
     </RequireAuth>
   );

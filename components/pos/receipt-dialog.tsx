@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Mail, Printer } from "lucide-react";
+import { Check, CloudOff, Mail, Printer } from "lucide-react";
 
 import { Receipt } from "@/components/pos/receipt";
 import { Modal } from "@/components/ui/modal";
@@ -55,6 +55,16 @@ function ReceiptBody({
 
   return (
     <div className="flex flex-col gap-6">
+      {sale.syncedAt === null && sale.createdOffline === true ? (
+        <div className="no-print flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+          <CloudOff aria-hidden="true" className="size-4 shrink-0" />
+          Synced: Pending
+          <span className="font-normal text-amber-700">
+            — saved on this device
+          </span>
+        </div>
+      ) : null}
+
       <div className="rounded-2xl border border-border bg-well/60 p-4">
         <Receipt sale={sale} />
       </div>

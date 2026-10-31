@@ -5,9 +5,9 @@
  * (never `NEXT_PUBLIC_`-prefixed, so the Consumer Secret and Passkey never reach
  * the browser bundle) and owns every outbound M-Pesa call the till makes:
  *
- *   - the OAuth token fetch (`/mpesa/api/v1/token/`) with a short-lived cache,
- *   - the STK Push initiation (`/mpesa/api/v1/stkpush/processrequest`),
- *   - parsing and validation of the Safarici webhook callback.
+ *   - the OAuth token fetch (`/oauth/v1/generate`) with a short-lived cache,
+ *   - the STK Push initiation (`/mpesa/stkpush/v1/processrequest`),
+ *   - parsing and validation of the Safaricom webhook callback.
  *
  * The till-facing routes under `/api/pos/mpesa/*` call into this module, which
  * is what keeps the credentials behind the server: the browser can ask "send the
@@ -27,7 +27,7 @@ export interface MpesaConfig {
   passkey: string;
   /** The PayBill shortcode the till charges, e.g. Safaricom's demo `174379`. */
   shortcode: string;
-  /** Where Safarici sends the customer's approval result. */
+  /** Where Safaricom sends the customer's approval result. */
   callbackUrl: string;
 }
 
@@ -39,13 +39,11 @@ export class MpesaError extends Error {
 }
 
 const SANDBOX = {
-  authUrl: "https://api.sandbox.m-pesa.com/mpesa/api/v1/token/",
-  apiBaseUrl: "https://api.sandbox.m-pesa.com/mpesa/api/v1",
+  baseUrl: "https://sandbox.safaricom.co.ke",
 };
 
 const PRODUCTION = {
-  authUrl: "https://api.safaricom.com/mpesa/api/v1/token/",
-  apiBaseUrl: "https://api.safaricom.com/mpesa/api/v1",
+  baseUrl: "https://api.safaricom.co.ke",
 };
 
 export function getMpesaConfig(): MpesaConfig {
@@ -104,7 +102,7 @@ interface MpesaTokenCache {
 
 let tokenCache: MpesaTokenCache | null = null;
 
-/** Daraji's `BusinessShortCode + Passkey + Timestamp` password, base64. */
+/** Daraja's `BusinessShortCode + Passkey + Timestamp` password, base64. */
 function tokenPassword(config: MpesaConfig, timestamp: string): string {
   return btoa(`${config.shortcode}${config.passkey}${timestamp}`);
 }
@@ -123,21 +121,17 @@ function darajaUrls(environment: MpesaEnvironment) {
 }
 
 async function fetchMpesaToken(config: MpesaConfig): Promise<string> {
-  const timestamp = mpesaTimestamp();
   const basic = btoa(`${config.consumerKey}:${config.consumerSecret}`);
 
-  const response = await fetch(darajaUrls(config.environment).authUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${basic}`,
+  const response = await fetch(
+    `${darajaUrls(config.environment).baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Basic ${basic}`,
+      },
     },
-    body: JSON.stringify({
-      BusinessShortCode: config.shortcode,
-      Password: tokenPassword(config, timestamp),
-      Timestamp: timestamp,
-    }),
-  });
+  );
 
   const data = (await response.json().catch(() => null)) as MpesaTokenResponse | null;
 
@@ -206,26 +200,29 @@ export async function requestMpesaStkPush(
   const timestamp = mpesaTimestamp();
   const password = tokenPassword(config, timestamp);
 
-  const response = await fetch(`${darajaUrls(config.environment).apiBaseUrl}/stkpush/processrequest`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${await getMpesaAccessToken()}`,
+  const response = await fetch(
+    `${darajaUrls(config.environment).baseUrl}/mpesa/stkpush/v1/processrequest`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${await getMpesaAccessToken()}`,
+      },
+      body: JSON.stringify({
+        BusinessShortCode: config.shortcode,
+        Password: password,
+        Timestamp: timestamp,
+        TransactionType: "CustomerPayBill",
+        Amount: String(amountKes),
+        PartyA: input.phoneNumber,
+        PartyB: config.shortcode,
+        PhoneNumber: input.phoneNumber,
+        CallBackURL: config.callbackUrl,
+        AccountReference: input.accountReference,
+        TransactionDesc: input.transactionDesc ?? "Pedigree POS",
+      }),
     },
-    body: JSON.stringify({
-      BusinessShortCode: config.shortcode,
-      Password: password,
-      Timestamp: timestamp,
-      TransactionType: "CustomerPayBill",
-      Amount: String(amountKes),
-      PartyA: input.phoneNumber,
-      PartyB: config.shortcode,
-      PhoneNumber: input.phoneNumber,
-      CallBackURL: config.callbackUrl,
-      AccountReference: input.accountReference,
-      TransactionDesc: input.transactionDesc ?? "Pedigree POS",
-    }),
-  });
+  );
 
   const data = (await response.json().catch(() => null)) as
     | Record<string, unknown>
@@ -351,8 +348,25 @@ export interface MpesaCallback {
   confirmationCode: string | null;
 }
 
+function metadataValue(items: unknown[], name: string): unknown {
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    if (item.Name === name) return item.Value;
+  }
+  return undefined;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 /**
- * Parse a Safarici M-Pesa callback payload into the fields the till acts on.
+ * Parse a Safaricom M-Pesa callback payload into the fields the till acts on.
  *
  * The approval lands as:
  *
@@ -360,19 +374,23 @@ export interface MpesaCallback {
  * {
  *   "MerchantRequestID": "…",
  *   "CheckoutRequestID": "…",
- *   "ResultCode": 0,
- *   "ResultDesc": "The service request is completed successfully.",
  *   "Body": {
- *     "Msisdn": "0700000000",
- *     "TransactionType": "CustomerPayBill",
- *     "Amount": 12500,
- *     "CallbackMetadata": { "Item": [ { "Key": "MpesaConfirmationCode", "Value": "SJK7Q2LM1P" } ] }
+ *     "stkCallback": {
+ *       "ResultCode": 0,
+ *       "ResultDesc": "The service request is processed successfully.",
+ *       "CallbackMetadata": {
+ *         "Item": [
+ *           { "Name": "Amount", "Value": 12500 },
+ *           { "Name": "MpesaReceiptNumber", "Value": "SJK7Q2LM1P" },
+ *           { "Name": "PhoneNumber", "Value": 254700000000 }
+ *         ]
+ *       }
+ *     }
  *   }
  * }
  * ```
  *
- * The metadata is read from `Body` but tolerated at the top level, and the
- * confirmation code is taken from the `MpesaConfirmationCode` item. Anything
+ * `ResultCode` and the metadata live inside `Body.stkCallback`. Anything
  * unreadable is an error rather than a silent `null`, because a callback that
  * cannot be read is exactly the one worth logging.
  */
@@ -381,26 +399,42 @@ export function parseMpesaCallback(body: unknown): MpesaCallback {
     throw new MpesaError("Malformed M-Pesa callback: body must be a JSON object.");
   }
 
-  const resultCode = typeof body.ResultCode === "number" ? body.ResultCode : Number(body.resultCode ?? 0) || 0;
-  const nested = isRecord(body.Body) ? body.Body : {};
-  const metadata = isRecord(nested.CallbackMetadata)
-    ? nested.CallbackMetadata
+  const bodyRecord = isRecord(body.Body) ? body.Body : {};
+  const stkCallback = isRecord(bodyRecord.stkCallback) ? bodyRecord.stkCallback : bodyRecord;
+  const metadata = isRecord(stkCallback.CallbackMetadata)
+    ? stkCallback.CallbackMetadata
     : isRecord(body.CallbackMetadata)
       ? body.CallbackMetadata
       : {};
   const items = Array.isArray(metadata.Item) ? metadata.Item : [];
 
-  let confirmationCode: string | null = null;
-  for (const item of items) {
-    if (!isRecord(item)) continue;
-    if (item.Key === "MpesaConfirmationCode") {
-      confirmationCode = typeof item.Value === "string" && item.Value.length > 0 ? item.Value : null;
-      break;
-    }
+  const resultCode = numberValue(stkCallback.ResultCode ?? body.ResultCode ?? body.resultCode);
+  if (resultCode === null) {
+    throw new MpesaError("Malformed M-Pesa callback: missing Body.stkCallback.ResultCode.");
   }
 
-  const rawPhone = typeof nested.Msisdn === "string" ? nested.Msisdn : typeof body.Msisdn === "string" ? body.Msisdn : null;
+  const confirmationValue = metadataValue(items, "MpesaReceiptNumber");
+  const confirmationCode =
+    typeof confirmationValue === "string" && confirmationValue.length > 0
+      ? confirmationValue
+      : typeof confirmationValue === "number"
+        ? String(confirmationValue)
+        : null;
+
+  const metadataPhone = metadataValue(items, "PhoneNumber");
+  const rawPhone =
+    typeof metadataPhone === "string" || typeof metadataPhone === "number"
+      ? String(metadataPhone)
+      : typeof stkCallback.Msisdn === "string"
+        ? stkCallback.Msisdn
+        : typeof body.Msisdn === "string"
+          ? body.Msisdn
+          : null;
   const phoneNumber = rawPhone !== null ? normalizePhoneNumber(rawPhone) ?? rawPhone : null;
+
+  const metadataAmount = numberValue(metadataValue(items, "Amount"));
+  const amount =
+    metadataAmount ?? numberValue(stkCallback.Amount) ?? numberValue(body.Amount);
 
   return {
     merchantRequestId:
@@ -417,13 +451,15 @@ export function parseMpesaCallback(body: unknown): MpesaCallback {
           : null,
     resultCode,
     resultDescription:
-      typeof body.ResultDesc === "string" && body.ResultDesc.length > 0
-        ? body.ResultDesc
-        : typeof body.resultDescription === "string"
-          ? body.resultDescription
-          : null,
+      typeof stkCallback.ResultDesc === "string" && stkCallback.ResultDesc.length > 0
+        ? stkCallback.ResultDesc
+        : typeof body.ResultDesc === "string" && body.ResultDesc.length > 0
+          ? body.ResultDesc
+          : typeof body.resultDescription === "string" && body.resultDescription.length > 0
+            ? body.resultDescription
+            : null,
     phoneNumber,
-    amount: typeof nested.Amount === "number" ? nested.Amount : typeof body.Amount === "number" ? body.Amount : null,
+    amount,
     confirmationCode,
   };
 }

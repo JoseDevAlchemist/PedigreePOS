@@ -4,7 +4,7 @@ import { logError, logInfo } from "@/lib/logger";
 import { MpesaError, parseMpesaCallback, type MpesaCallback } from "@/lib/mpesa";
 
 /**
- * The M-Pesa (Lipa Na M-Pesa) payment callback — the URL Safarici calls when the
+ * The M-Pesa (Lipa Na M-Pesa) payment callback — the URL Safaricom calls when the
  * customer approves or declines the STK Push prompt.
  *
  * Registered as `MPESA_CALLBACK_URL` in the Daraja portal and set to this
@@ -13,7 +13,7 @@ import { MpesaError, parseMpesaCallback, type MpesaCallback } from "@/lib/mpesa"
  * On `ResultCode === 0` the payment succeeded and the confirmation code is read
  * from the callback metadata and returned to the caller (the till's client) so
  * the cashier can attach it to the sale. Anything else is logged with full
- * context and acknowledged with `200` so Safarici does not retry a result that
+ * context and acknowledged with `200` so Safaricom does not retry a result that
  * has already been received.
  */
 
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
       error instanceof Error ? error : new MpesaError("Malformed M-Pesa callback: invalid JSON body."),
     );
     // Acknowledge anyway: a retry of an unreadable body cannot succeed, and a
-    // non-2xx would only cause Safarici to hammer the endpoint.
+    // non-2xx would only cause Safaricom to hammer the endpoint.
     return NextResponse.json({ ResultCode: 0, error: logged.message }, { status: 200 });
   }
 

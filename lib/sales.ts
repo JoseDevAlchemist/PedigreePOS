@@ -138,6 +138,7 @@ export async function completeSale(input: CompleteSaleInput): Promise<LocalSale>
         : (input.paymentReference?.trim() || null),
     createdAt,
     syncedAt: null,
+    createdOffline: typeof navigator !== "undefined" ? !navigator.onLine : false,
     items,
   };
 
